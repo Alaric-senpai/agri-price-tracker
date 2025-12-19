@@ -62,11 +62,6 @@ app.use(requestLogger);
 
 
 
-export default function handler(req: VercelRequest, res: VercelResponse) {
-  app(req, res);
-}
-
-
 // Rate limiting
 app.use(rateLimiter);
 
@@ -96,8 +91,8 @@ app.use(`/api/${API_VERSION}/kamis`, kamisRoutes);
 app.use(`/api/${API_VERSION}/ml`, mlRoutes);
 app.use(`/api/${API_VERSION}/analytics`, analyticsRoutes);
 app.use(`/api/${API_VERSION}/regions`, regionRoutes);
-app.use(`/api/${API_VERSION}/admin/alerts`, alertsRoutes)
-app.use(`/api/${API_VERSION}/stats`, statsRoutes)
+app.use(`/api/${API_VERSION}/admin/alerts`, alertsRoutes);
+app.use(`/api/${API_VERSION}/stats`, statsRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -130,8 +125,6 @@ const gracefulShutdown = (signal: string) => {
   }, 30000);
 };
 
-
-
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
@@ -146,13 +139,15 @@ const startServer = async () => {
     startCronJobs();
     logger.info('Cron jobs started');
 
-    // Start HTTP server
-    server.listen(PORT, () => {
-      logger.info(`🚀 Server running on port ${PORT}`);
-      logger.info(`📚 API Documentation: http://localhost:${PORT}/api/${API_VERSION}`);
-      logger.info(`🏥 Health Check: http://localhost:${PORT}/health`);
-      logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
-    });
+    // Start HTTP server only if not in Vercel environment
+    if (!process.env.VERCEL) {
+      server.listen(PORT, () => {
+        logger.info(`🚀 Server running on port ${PORT}`);
+        logger.info(`📚 API Documentation: http://localhost:${PORT}/api/${API_VERSION}`);
+        logger.info(`🏥 Health Check: http://localhost:${PORT}/health`);
+        logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
+      });
+    }
 
   } catch (error) {
     logger.error('Failed to start server:', error);
@@ -162,4 +157,9 @@ const startServer = async () => {
 
 startServer();
 
-export default app;
+// Vercel Handler
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  app(req, res);
+}
+
+export { app };
