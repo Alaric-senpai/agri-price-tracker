@@ -1,0 +1,264 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model admin_requests {
+  id           String                @id @default(uuid()) @db.Uuid
+  full_name    String                @db.VarChar(255)
+  email        String                @db.VarChar(255)
+  phone        String                @db.VarChar(20)
+  region       String                @db.VarChar(100)
+  organization String                @db.VarChar(255)
+  reason       String?
+  status       admin_request_status? @default(pending)
+  reviewed_by  String?               @db.Uuid
+  reviewed_at  DateTime?             @db.Timestamptz(6)
+  created_at   DateTime?             @default(now()) @db.Timestamptz(6)
+  users        users?                @relation(fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model chat_conversations {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String?   @db.Uuid
+  session_id String?   @db.VarChar(255)
+  messages   Json
+  context    Json?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model crops {
+  id                String              @id @default(uuid()) @db.Uuid
+  name              String              @unique @db.VarChar(100)
+  category          String              @db.VarChar(50)
+  description       String?
+  unit              String?             @default("kg") @db.VarChar(20)
+  is_active         Boolean?            @default(true)
+  created_at        DateTime?           @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime?           @default(now()) @db.Timestamptz(6)
+  price_entries     price_entries[]
+  price_predictions price_predictions[]
+}
+
+model kamis_sync_logs {
+  id                String    @id @default(uuid()) @db.Uuid
+  sync_date         DateTime  @db.Date
+  records_processed Int?      @default(0)
+  records_inserted  Int?      @default(0)
+  records_updated   Int?      @default(0)
+  status            String?   @default("pending") @db.VarChar(20)
+  error_message     String?
+  started_at        DateTime? @default(now()) @db.Timestamptz(6)
+  completed_at      DateTime? @db.Timestamptz(6)
+}
+
+model markets {
+  id            String          @id @default(uuid()) @db.Uuid
+  name          String          @db.VarChar(100)
+  region_id     String          @db.Uuid
+  location      String?         @db.VarChar(255)
+  contact_info  Json?
+  is_active     Boolean?        @default(true)
+  created_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  regions       regions         @relation(fields: [region_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  price_entries price_entries[]
+
+  @@unique([name, region_id])
+}
+
+model price_entries {
+  id                                     String    @id @default(uuid()) @db.Uuid
+  crop_id                                String    @db.Uuid
+  region_id                              String    @db.Uuid
+  market_id                              String?   @db.Uuid
+  price                                  Decimal   @db.Decimal(10, 2)
+  unit                                   String?   @default("kg") @db.VarChar(20)
+  source                                 String    @db.VarChar(50)
+  entered_by                             String?   @db.Uuid
+  verified_by                            String?   @db.Uuid
+  is_verified                            Boolean?  @default(false)
+  notes                                  String?
+  entry_date                             DateTime  @default(dbgenerated("CURRENT_DATE")) @db.Date
+  created_at                             DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at                             DateTime? @default(now()) @db.Timestamptz(6)
+  crops                                  crops     @relation(fields: [crop_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_price_entries_entered_byTousers  users?    @relation("price_entries_entered_byTousers", fields: [entered_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  markets                                markets?  @relation(fields: [market_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  regions                                regions   @relation(fields: [region_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_price_entries_verified_byTousers users?    @relation("price_entries_verified_byTousers", fields: [verified_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([crop_id, region_id], map: "idx_price_entries_crop_region")
+  @@index([entry_date], map: "idx_price_entries_date")
+  @@index([source], map: "idx_price_entries_source")
+  @@index([is_verified], map: "idx_price_entries_verified")
+}
+
+model price_predictions {
+  id               String    @id @default(uuid()) @db.Uuid
+  crop_id          String    @db.Uuid
+  region_id        String    @db.Uuid
+  current_price    Decimal   @db.Decimal(10, 2)
+  predicted_price  Decimal   @db.Decimal(10, 2)
+  prediction_date  DateTime  @db.Date
+  confidence_score Decimal?  @db.Decimal(5, 4)
+  model_version    String?   @db.VarChar(50)
+  factors          Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  crops            crops     @relation(fields: [crop_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  regions          regions   @relation(fields: [region_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([crop_id, region_id], map: "idx_price_predictions_crop_region")
+  @@index([prediction_date], map: "idx_price_predictions_date")
+}
+
+model regions {
+  id                String              @id @default(uuid()) @db.Uuid
+  name              String              @unique @db.VarChar(100)
+  code              String              @unique @db.VarChar(10)
+  description       String?
+  is_active         Boolean?            @default(true)
+  created_at        DateTime?           @default(now()) @db.Timestamptz(6)
+  markets           markets[]
+  price_entries     price_entries[]
+  price_predictions price_predictions[]
+}
+
+model sms_logs {
+  id            String      @id @default(uuid()) @db.Uuid
+  recipient     String      @db.VarChar(20)
+  message       String
+  sms_type      sms_type
+  status        sms_status? @default(pending)
+  external_id   String?     @db.VarChar(255)
+  cost          Decimal?    @db.Decimal(8, 4)
+  sent_by       String?     @db.Uuid
+  error_message String?
+  sent_at       DateTime?   @db.Timestamptz(6)
+  delivered_at  DateTime?   @db.Timestamptz(6)
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  users         users?      @relation(fields: [sent_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at], map: "idx_sms_logs_created_at")
+  @@index([recipient], map: "idx_sms_logs_recipient")
+  @@index([status], map: "idx_sms_logs_status")
+}
+
+model sms_subscriptions {
+  id          String    @id @default(uuid()) @db.Uuid
+  phone       String    @unique @db.VarChar(20)
+  user_id     String?   @db.Uuid
+  crops       Json?
+  regions     Json?
+  alert_types Json?
+  is_active   Boolean?  @default(true)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
+  users       users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([is_active], map: "idx_sms_subscriptions_active")
+  @@index([phone], map: "idx_sms_subscriptions_phone")
+}
+
+model sms_templates {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String    @unique @db.VarChar(100)
+  template   String
+  variables  Json?
+  sms_type   sms_type
+  is_active  Boolean?  @default(true)
+  created_by String    @db.Uuid
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model system_settings {
+  id          String    @id @default(uuid()) @db.Uuid
+  key         String    @unique @db.VarChar(100)
+  value       Json
+  description String?
+  updated_by  String?   @db.Uuid
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
+  users       users?    @relation(fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model users {
+  id                                             String                  @id @default(uuid()) @db.Uuid
+  email                                          String                  @unique @db.VarChar(255)
+  password_hash                                  String                  @db.VarChar(255)
+  full_name                                      String                  @db.VarChar(255)
+  phone                                          String?                 @db.VarChar(20)
+  role                                           user_role?              @default(farmer)
+  region                                         String?                 @db.VarChar(100)
+  organization                                   String?                 @db.VarChar(255)
+  is_active                                      Boolean?                @default(true)
+  email_verified                                 Boolean?                @default(false)
+  last_login                                     DateTime?               @db.Timestamptz(6)
+  created_at                                     DateTime?               @default(now()) @db.Timestamptz(6)
+  updated_at                                     DateTime?               @default(now()) @db.Timestamptz(6)
+  admin_requests                                 admin_requests[]
+  chat_conversations                             chat_conversations[]
+  price_entries_price_entries_entered_byTousers  price_entries[]         @relation("price_entries_entered_byTousers")
+  price_entries_price_entries_verified_byTousers price_entries[]         @relation("price_entries_verified_byTousers")
+  sms_logs                                       sms_logs[]
+  sms_subscriptions                              sms_subscriptions[]
+  sms_templates                                  sms_templates[]
+  system_settings                                system_settings[]
+  password_reset_tokens                          password_reset_tokens[]
+
+  @@index([email], map: "idx_users_email")
+  @@index([region], map: "idx_users_region")
+  @@index([role], map: "idx_users_role")
+}
+
+enum admin_request_status {
+  pending
+  approved
+  rejected
+}
+
+enum price_trend {
+  up
+  down
+  stable
+}
+
+enum sms_status {
+  pending
+  sent
+  failed
+  delivered
+}
+
+enum sms_type {
+  alert
+  update
+  prediction
+  weather
+  general
+}
+
+enum user_role {
+  farmer
+  admin
+  super_admin
+}
+
+model password_reset_tokens {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String    @db.Uuid
+  token      String    @db.VarChar(255)
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([token], map: "idx_password_reset_tokens_token")
+  @@index([user_id], map: "idx_password_reset_tokens_user_id")
+}

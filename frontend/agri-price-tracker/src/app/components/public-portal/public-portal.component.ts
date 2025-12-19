@@ -30,10 +30,44 @@ interface DisplayCrop {
   date: string | Date;
 }
 
+import { TableModule } from 'primeng/table';
+import { DialogModule } from 'primeng/dialog';
+import { ButtonModule } from 'primeng/button';
+import { InputTextModule } from 'primeng/inputtext';
+import { SelectModule } from 'primeng/select';
+import { TabsModule } from 'primeng/tabs';
+import { TagModule } from 'primeng/tag';
+import { CardModule } from 'primeng/card';
+import { InputGroupModule } from 'primeng/inputgroup';
+import { InputGroupAddonModule } from 'primeng/inputgroupaddon';
+import { ToastModule } from 'primeng/toast';
+import { KnobModule } from 'primeng/knob';
+import { TextareaModule } from 'primeng/textarea';
+import { CheckboxModule } from 'primeng/checkbox';
+import { MessageModule } from 'primeng/message';
+
 @Component({
   selector: 'app-public-portal',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    TableModule,
+    DialogModule,
+    ButtonModule,
+    InputTextModule,
+    SelectModule,
+    TabsModule,
+    TagModule,
+    CardModule,
+    InputGroupModule,
+    InputGroupAddonModule,
+    ToastModule,
+    KnobModule,
+    TextareaModule,
+    CheckboxModule,
+    MessageModule
+  ],
   templateUrl: './public-portal.component.html',
   styleUrls: ['./public-portal.component.css']
 })
@@ -120,6 +154,12 @@ export class PublicPortalComponent implements OnInit {
   ngOnInit(): void {
     this.checkAuth();
     this.loadData();
+  }
+
+  onTabChange(event: string | number | undefined) {
+    if (typeof event === 'string') {
+      this.activeTab = event;
+    }
   }
 
   openHistoryModal(crop: DisplayCrop) {
@@ -248,9 +288,9 @@ export class PublicPortalComponent implements OnInit {
 
 
         pricesData.sort((a: any, b: any) => {
-           const timeA = new Date(a.created_at || a.entry_date).getTime();
-           const timeB = new Date(b.created_at || b.entry_date).getTime();
-           return timeB - timeA;
+          const timeA = new Date(a.created_at || a.entry_date).getTime();
+          const timeB = new Date(b.created_at || b.entry_date).getTime();
+          return timeB - timeA;
         });
 
 
@@ -289,8 +329,8 @@ export class PublicPortalComponent implements OnInit {
             trend: this.calculateTrend(currentPrice, previousPrice),
             region: item.region_name || item.region || 'Unknown',
             market: item.market_name || item.market || 'Unknown',
-            lastUpdated: this.formatDate (item.created_at||item.entry_date),
-            date: item.created_at||item.entry_date,
+            lastUpdated: this.formatDate(item.created_at || item.entry_date),
+            date: item.created_at || item.entry_date,
             prediction: realPrediction ? realPrediction.predicted_price : currentPrice,
             confidence: realPrediction ? realPrediction.confidence_score : 0,
             crop_id: item.crop_id,

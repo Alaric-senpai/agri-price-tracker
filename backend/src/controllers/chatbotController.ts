@@ -1,45 +1,51 @@
 import { Request, Response, NextFunction } from 'express';
-import { query } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { ApiError } from '../utils/apiError';
 import { logger } from '../utils/logger';
 import { generateChatResponse } from '../services/geminiService';
 import type { ChatRequest, ChatMessage, ChatConversation, ApiResponse } from '../types/index';
+import { Prisma } from '../../generated/prisma/client';
 
+/**
+ * send message
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const sendMessage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { message, session_id, context }: ChatRequest = req.body;
     const userId = req.user?.id;
 
     // Get or create conversation
-    let conversation: ChatConversation;
-    
+    let conversation: any;
+
     if (session_id) {
-      const result = await query(
-        'SELECT * FROM chat_conversations WHERE session_id = $1',
-        [session_id]
-      );
-      
-      if (result.rows.length > 0) {
-        conversation = result.rows[0];
-      } else {
+      conversation = await prisma.chat_conversations.findFirst({
+        where: { session_id }
+      });
+
+      if (!conversation) {
         // Create new conversation
-        const newConversation = await query(
-          `INSERT INTO chat_conversations (user_id, session_id, messages, context)
-           VALUES ($1, $2, $3, $4)
-           RETURNING *`,
-          [userId, session_id, JSON.stringify([]), JSON.stringify(context || {})]
-        );
-        conversation = newConversation.rows[0];
+        conversation = await prisma.chat_conversations.create({
+          data: {
+            user_id: userId || null,
+            session_id,
+            messages: [],
+            context: (context || {}) as Prisma.InputJsonValue
+          }
+        });
       }
     } else {
       // Create new conversation without session_id
-      const newConversation = await query(
-        `INSERT INTO chat_conversations (user_id, messages, context)
-         VALUES ($1, $2, $3)
-         RETURNING *`,
-        [userId, JSON.stringify([]), JSON.stringify(context || {})]
-      );
-      conversation = newConversation.rows[0];
+      conversation = await prisma.chat_conversations.create({
+        data: {
+          user_id: userId || null,
+          messages: [],
+          context: (context || {}) as Prisma.InputJsonValue
+        }
+      });
     }
 
     // Add user message to conversation
@@ -49,7 +55,8 @@ export const sendMessage = async (req: Request, res: Response, next: NextFunctio
       timestamp: new Date()
     };
 
-    const messages = [...conversation.messages, userMessage];
+    const currentMessages = (conversation.messages as unknown as ChatMessage[]) || [];
+    const messages = [...currentMessages, userMessage];
 
     // Generate AI response using Gemini
     const aiResponse = await generateChatResponse(message, messages, context);
@@ -64,12 +71,14 @@ export const sendMessage = async (req: Request, res: Response, next: NextFunctio
     const updatedMessages = [...messages, assistantMessage];
 
     // Update conversation in database
-    await query(
-      `UPDATE chat_conversations 
-       SET messages = $1, context = $2, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3`,
-      [JSON.stringify(updatedMessages), JSON.stringify(context || {}), conversation.id]
-    );
+    const updatedConversation = await prisma.chat_conversations.update({
+      where: { id: conversation.id },
+      data: {
+        messages: updatedMessages as unknown as Prisma.InputJsonValue,
+        context: (context || {}) as Prisma.InputJsonValue,
+        updated_at: new Date()
+      }
+    });
 
     logger.info(`Chat message processed for session: ${session_id || conversation.id}`);
 
@@ -89,33 +98,45 @@ export const sendMessage = async (req: Request, res: Response, next: NextFunctio
   }
 };
 
+/**
+ * get conversation
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const getConversation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { session_id } = req.params;
     const userId = req.user?.id;
 
-    let whereClause = 'WHERE session_id = $1';
-    let params = [session_id];
-
-    // If user is authenticated, also check user_id
-    if (userId) {
-      whereClause += ' AND (user_id = $2 OR user_id IS NULL)';
-      params.push(userId);
+    if (!session_id) {
+      throw new ApiError('Session ID is required', 400);
     }
 
-    const result = await query(
-      `SELECT * FROM chat_conversations ${whereClause} ORDER BY updated_at DESC LIMIT 1`,
-      params
-    );
+    const where: Prisma.chat_conversationsWhereInput = {
+      session_id
+    };
 
-    if (result.rows.length === 0) {
+    if (userId) {
+      where.OR = [
+        { user_id: userId },
+        { user_id: null }
+      ];
+    }
+
+    const conversation = await prisma.chat_conversations.findFirst({
+      where,
+      orderBy: { updated_at: 'desc' }
+    });
+
+    if (!conversation) {
       throw new ApiError('Conversation not found', 404);
     }
 
     const response: ApiResponse<ChatConversation> = {
       success: true,
       message: 'Conversation retrieved successfully',
-      data: result.rows[0]
+      data: conversation as unknown as ChatConversation
     };
 
     res.json(response);
@@ -124,30 +145,55 @@ export const getConversation = async (req: Request, res: Response, next: NextFun
   }
 };
 
+/**
+ * get user conversations
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const getUserConversations = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const userId = req.user!.id;
     const { page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
-    const result = await query(
-      `SELECT id, session_id, context, created_at, updated_at,
-              (messages->-1->>'content') as last_message
-       FROM chat_conversations 
-       WHERE user_id = $1
-       ORDER BY updated_at DESC
-       LIMIT $2 OFFSET $3`,
-      [userId, limit, offset]
-    );
+    const [conversations, total] = await prisma.$transaction([
+      prisma.chat_conversations.findMany({
+        where: { user_id: userId },
+        orderBy: { updated_at: 'desc' },
+        skip: offset,
+        take: Number(limit),
+        select: {
+          id: true,
+          session_id: true,
+          context: true,
+          created_at: true,
+          updated_at: true,
+          messages: true
+        }
+      }),
+      prisma.chat_conversations.count({ where: { user_id: userId } })
+    ]);
 
-    const countResult = await query('SELECT COUNT(*) FROM chat_conversations WHERE user_id = $1', [userId]);
-    const total = parseInt(countResult.rows[0].count);
     const pages = Math.ceil(total / Number(limit));
 
-    const response: ApiResponse<ChatConversation[]> = {
+    // Map to include last_message manually since we can't easily select it with Prisma like SQL
+    const mappedConversations = conversations.map(conv => {
+      const msgs = conv.messages as unknown as ChatMessage[];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lastMsg = msgs && msgs.length > 0 ? (msgs[msgs.length - 1] as any).content ?? (msgs[msgs.length - 1] as unknown as string) : null;
+      // We don't return the full messages array in the list view to stay efficient
+      const { messages, ...rest } = conv;
+      return {
+        ...rest,
+        last_message: lastMsg
+      };
+    });
+
+    const response: ApiResponse<any[]> = {
       success: true,
       message: 'User conversations retrieved successfully',
-      data: result.rows,
+      data: mappedConversations,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -162,19 +208,33 @@ export const getUserConversations = async (req: Request, res: Response, next: Ne
   }
 };
 
+/**
+ * delete conversation
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const deleteConversation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
 
-    const result = await query(
-      'DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2 RETURNING id',
-      [id, userId]
-    );
+    if (!id) {
+      throw new ApiError('Conversation ID is required', 400);
+    }
 
-    if (result.rows.length === 0) {
+    // First check if it exists and belongs to user
+    const conversation = await prisma.chat_conversations.findFirst({
+      where: { id, user_id: userId }
+    });
+
+    if (!conversation) {
       throw new ApiError('Conversation not found or access denied', 404);
     }
+
+    await prisma.chat_conversations.delete({
+      where: { id }
+    });
 
     logger.info(`Conversation deleted: ${id} by ${req.user!.email}`);
 
@@ -189,25 +249,44 @@ export const deleteConversation = async (req: Request, res: Response, next: Next
   }
 };
 
+/**
+ * get chat stats
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const getChatStats = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const stats = await Promise.all([
-      query('SELECT COUNT(*) FROM chat_conversations WHERE DATE(created_at) = CURRENT_DATE'),
-      query('SELECT COUNT(DISTINCT user_id) FROM chat_conversations WHERE user_id IS NOT NULL'),
-      query('SELECT COUNT(*) FROM chat_conversations'),
-      query(`SELECT AVG(jsonb_array_length(messages)) as avg_messages 
-             FROM chat_conversations 
-             WHERE jsonb_array_length(messages) > 0`)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [todayConversations, uniqueUsers, totalConversations, avgMessagesResult] = await prisma.$transaction([
+      prisma.chat_conversations.count({
+        where: {
+          created_at: { gte: today }
+        }
+      }),
+      prisma.chat_conversations.groupBy({
+        by: ['user_id'],
+        where: { user_id: { not: null } },
+        orderBy: { user_id: 'asc' }
+      }),
+      prisma.chat_conversations.count(),
+      prisma.$queryRaw`SELECT AVG(jsonb_array_length(messages)) as avg_messages
+             FROM chat_conversations
+             WHERE jsonb_array_length(messages) > 0`
     ]);
+
+    const avgMessages = (avgMessagesResult as any)[0]?.avg_messages || 0;
 
     const response: ApiResponse = {
       success: true,
       message: 'Chat stats retrieved successfully',
       data: {
-        todayConversations: parseInt(stats[0].rows[0].count),
-        uniqueUsers: parseInt(stats[1].rows[0].count),
-        totalConversations: parseInt(stats[2].rows[0].count),
-        avgMessagesPerConversation: parseFloat(stats[3].rows[0].avg_messages || '0')
+        todayConversations,
+        uniqueUsers: uniqueUsers.length,
+        totalConversations,
+        avgMessagesPerConversation: parseFloat(avgMessages.toString())
       }
     };
 

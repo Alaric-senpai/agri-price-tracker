@@ -1,34 +1,47 @@
 import { Router } from 'express';
 import { validate, schemas } from '../middleware/validation';
 import { authenticate, requireAdmin } from '../middleware/auth';
-import { query } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { ApiError } from '../utils/apiError';
 import type { ApiResponse } from '../types/index';
 
-const router = Router();
+const router: Router = Router();
 
+/**
+ * @swagger
+ * tags:
+ *   name: Regions
+ *   description: Region management
+ */
+
+/**
+ * @swagger
+ * /regions:
+ *   get:
+ *     summary: Get all regions
+ *     tags: [Regions]
+ *     parameters:
+ *       - in: query
+ *         name: is_active
+ *         schema:
+ *           type: boolean
+ *     responses:
+ *       200:
+ *         description: List of regions
+ */
 router.get('/', async (req, res, next) => {
     try {
         const { is_active = true } = req.query as { is_active?: boolean };
 
-        const conditions: string[] = [];
-        const params: any[] = [];
-        let paramIndex = 1;
+        const regions = await prisma.regions.findMany({
+            where: is_active !== undefined ? { is_active: Boolean(is_active) } : {},
+            orderBy: { name: 'asc' }
+        });
 
-        if (is_active !== undefined) {
-            conditions.push(`is_active = $${paramIndex++}`);
-            params.push(is_active);
-        }
-
-        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-        const result = await query(
-            `SELECT * FROM regions ${whereClause} ORDER BY name ASC`,
-            params
-        );
         const response: ApiResponse = {
             success: true,
             message: 'Regions retrieved successfully',
-            data: result.rows
+            data: regions
         };
 
         res.json(response);
@@ -38,20 +51,40 @@ router.get('/', async (req, res, next) => {
 });
 
 // Get region by ID (public)
+/**
+ * @swagger
+ * /regions/{id}:
+ *   get:
+ *     summary: Get region by ID
+ *     tags: [Regions]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Region details
+ *       404:
+ *         description: Region not found
+ */
 router.get('/:id', async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
-        const result = await query('SELECT * FROM regions WHERE id = $1', [id]);
+        const region = await prisma.regions.findUnique({
+            where: { id }
+        });
 
-        if (result.rows.length === 0) {
+        if (!region) {
             throw new ApiError('Region not found', 404);
         }
 
         const response: ApiResponse = {
             success: true,
             message: 'Region retrieved successfully',
-            data: result.rows[0]
+            data: region
         };
 
         res.json(response);
@@ -61,19 +94,52 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // Create region (admin only)
+/**
+ * @swagger
+ * /regions:
+ *   post:
+ *     summary: Create region
+ *     tags: [Regions]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - code
+ *             properties:
+ *               name:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Region created
+ *       403:
+ *         description: Admin access required
+ */
 router.post('/', authenticate, requireAdmin, validate(schemas.createRegion), async (req, res, next) => {
     try {
         const { name, code, description } = req.body;
 
-        const result = await query(
-            'INSERT INTO regions (name, code, description) VALUES ($1, $2, $3) RETURNING *',
-            [name, code, description]
-        );
+        const region = await prisma.regions.create({
+            data: {
+                name,
+                code,
+                description
+            }
+        });
 
         const response: ApiResponse = {
             success: true,
             message: 'Region created successfully',
-            data: result.rows[0]
+            data: region
         };
 
         res.status(201).json(response);
@@ -83,49 +149,100 @@ router.post('/', authenticate, requireAdmin, validate(schemas.createRegion), asy
 });
 
 // Update region (admin only)
+/**
+ * @swagger
+ * /regions/{id}:
+ *   put:
+ *     summary: Update region
+ *     tags: [Regions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               is_active:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Region updated
+ *       403:
+ *         description: Admin access required
+ */
 router.put('/:id', authenticate, requireAdmin, validate(schemas.updateRegion), async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
         const { name, code, description, is_active } = req.body;
 
-        const result = await query(
-            `UPDATE regions 
-      SET name = COALESCE($1, name),
-           code = COALESCE($2, code),
-           description = COALESCE($3, description),
-           is_active = COALESCE($4, is_active),
-           updated_at = CURRENT_TIMESTAMP
-      WHERE id = $5
-       RETURNING *`,
-            [name, code, description, is_active, id]
-        );
-
-        if (result.rows.length === 0) {
-            throw new ApiError('Region not found', 404);
-        }
+        const region = await prisma.regions.update({
+            where: { id },
+            data: {
+                name,
+                code,
+                description,
+                is_active
+            }
+        });
 
         const response: ApiResponse = {
             success: true,
             message: 'Region updated successfully',
-            data: result.rows[0]
+            data: region
         };
 
         res.json(response);
     } catch (error) {
-        next(error);
+        if (error.code === 'P2025') {
+            next(new ApiError('Region not found', 404));
+        } else {
+            next(error);
+        }
     }
 });
 
 // Delete region (admin only)
+/**
+ * @swagger
+ * /regions/{id}:
+ *   delete:
+ *     summary: Delete region
+ *     tags: [Regions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Region deleted
+ *       403:
+ *         description: Admin access required
+ */
 router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
-        const result = await query('DELETE FROM regions WHERE id = $1 RETURNING id', [id]);
-
-        if (result.rows.length === 0) {
-            throw new ApiError('Region not found', 404);
-        }
+        await prisma.regions.delete({
+            where: { id }
+        });
 
         const response: ApiResponse = {
             success: true,
@@ -134,7 +251,11 @@ router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
 
         res.json(response);
     } catch (error) {
-        next(error);
+        if (error.code === 'P2025') {
+            next(new ApiError('Region not found', 404));
+        } else {
+            next(error);
+        }
     }
 });
 export default router;

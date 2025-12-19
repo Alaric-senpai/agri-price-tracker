@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { query, transaction } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { ApiError } from '../utils/apiError';
 import { logger } from '../utils/logger';
-import { sendSmsMessage, sendBulkSms } from '../services/smsService';
+import { sendBulkSms } from '../services/smsService';
+import { Prisma } from '../../generated/prisma/client';
 import type { SendSmsRequest, SmsTemplate, SmsLog, SmsSubscription, ApiResponse } from '../types/index';
 
 export const sendSms = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -20,12 +21,16 @@ export const sendSms = async (req: Request, res: Response, next: NextFunction): 
 
     // If template is used, process variables
     if (template_id && template_variables) {
-      const templateResult = await query('SELECT template FROM sms_templates WHERE id = $1', [template_id]);
-      if (templateResult.rows.length > 0) {
-        finalMessage = templateResult.rows[0].template;
+      const templateRecord = await prisma.sms_templates.findUnique({
+        where: { id: template_id },
+        select: { template: true }
+      });
+
+      if (templateRecord) {
+        finalMessage = templateRecord.template;
         // Replace variables in template
         Object.entries(template_variables).forEach(([key, value]) => {
-          finalMessage = finalMessage.replace(new RegExp(`{${key}}`, 'g'), value);
+          finalMessage = finalMessage.replace(new RegExp(`{${key}}`, 'g'), String(value));
         });
       }
     }
@@ -56,52 +61,49 @@ export const getSmsLogs = async (req: Request, res: Response, next: NextFunction
     const { page = 1, limit = 20, status, sms_type, date_from, date_to } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIndex = 1;
+    const where: Prisma.sms_logsWhereInput = {};
 
     if (status) {
-      conditions.push(`status = $${paramIndex++}`);
-      params.push(status);
+      where.status = status as any; // Cast to enum if needed, or string
     }
     if (sms_type) {
-      conditions.push(`sms_type = $${paramIndex++}`);
-      params.push(sms_type);
+      where.sms_type = sms_type as any;
     }
-    if (date_from) {
-      conditions.push(`created_at >= $${paramIndex++}`);
-      params.push(date_from);
-    }
-    if (date_to) {
-      conditions.push(`created_at <= $${paramIndex++}`);
-      params.push(date_to);
+    if (date_from || date_to) {
+      where.created_at = {};
+      if (date_from) where.created_at.gte = new Date(date_from as string);
+      if (date_to) where.created_at.lte = new Date(date_to as string);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    params.push(limit, offset);
+    // Check if created_at object is empty and remove it if so to avoid query error? Typescript should handle it.
+    if (where.created_at && Object.keys(where.created_at).length === 0) delete where.created_at;
 
-    const result = await query(
-      `SELECT sl.*, u.full_name as sent_by_name
-       FROM sms_logs sl
-       LEFT JOIN users u ON sl.sent_by = u.id
-       ${whereClause}
-       ORDER BY sl.created_at DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
-      params
-    );
+    const [logs, total] = await prisma.$transaction([
+      prisma.sms_logs.findMany({
+        where,
+        include: {
+          users: {
+            select: { full_name: true }
+          }
+        },
+        orderBy: { created_at: 'desc' },
+        skip: offset,
+        take: Number(limit)
+      }),
+      prisma.sms_logs.count({ where })
+    ]);
 
-    const countResult = await query(
-      `SELECT COUNT(*) FROM sms_logs ${whereClause}`,
-      params.slice(0, -2)
-    );
-
-    const total = parseInt(countResult.rows[0].count);
     const pages = Math.ceil(total / Number(limit));
 
-    const response: ApiResponse<SmsLog[]> = {
+    const mappedLogs = logs.map(log => ({
+      ...log,
+      sent_by_name: log.users?.full_name || null
+    }));
+
+    const response: ApiResponse<any[]> = {
       success: true,
       message: 'SMS logs retrieved successfully',
-      data: result.rows,
+      data: mappedLogs,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -121,19 +123,22 @@ export const createSmsTemplate = async (req: Request, res: Response, next: NextF
     const { name, template, variables, sms_type } = req.body;
     const createdBy = req.user!.id;
 
-    const result = await query(
-      `INSERT INTO sms_templates (name, template, variables, sms_type, created_by)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [name, template, JSON.stringify(variables || []), sms_type, createdBy]
-    );
+    const newTemplate = await prisma.sms_templates.create({
+      data: {
+        name,
+        template,
+        variables: variables ? JSON.parse(JSON.stringify(variables)) : [],
+        sms_type,
+        created_by: createdBy
+      }
+    });
 
     logger.info(`SMS template created: ${name} by ${req.user!.email}`);
 
     const response: ApiResponse<SmsTemplate> = {
       success: true,
       message: 'SMS template created successfully',
-      data: result.rows[0]
+      data: newTemplate as any
     };
 
     res.status(201).json(response);
@@ -146,28 +151,31 @@ export const getSmsTemplates = async (req: Request, res: Response, next: NextFun
   try {
     const { sms_type, is_active = true } = req.query;
 
-    const conditions: string[] = ['is_active = $1'];
-    const params: any[] = [is_active];
-    let paramIndex = 2;
+    const where: Prisma.sms_templatesWhereInput = {
+      is_active: String(is_active) === 'true'
+    };
 
     if (sms_type) {
-      conditions.push(`sms_type = $${paramIndex++}`);
-      params.push(sms_type);
+      where.sms_type = sms_type as any;
     }
 
-    const result = await query(
-      `SELECT st.*, u.full_name as created_by_name
-   FROM sms_templates st
-   JOIN users u ON st.created_by = u.id
-   WHERE st.is_active = $1
-   ORDER BY st.created_at DESC`,
-      [true]
-    );
+    const templates = await prisma.sms_templates.findMany({
+      where,
+      include: {
+        users: { select: { full_name: true } }
+      },
+      orderBy: { created_at: 'desc' }
+    });
 
-    const response: ApiResponse<SmsTemplate[]> = {
+    const mappedTemplates = templates.map(t => ({
+      ...t,
+      created_by_name: t.users?.full_name || null
+    }));
+
+    const response: ApiResponse<any[]> = {
       success: true,
       message: 'SMS templates retrieved successfully',
-      data: result.rows
+      data: mappedTemplates
     };
 
     res.json(response);
@@ -179,34 +187,37 @@ export const getSmsTemplates = async (req: Request, res: Response, next: NextFun
 export const updateSmsTemplate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { id } = req.params;
+
+    if (!id) throw new ApiError('ID required', 400);
+
     const { name, template, variables, sms_type, is_active } = req.body;
 
-    const result = await query(
-      `UPDATE sms_templates 
-       SET name = COALESCE($1, name),
-           template = COALESCE($2, template),
-           variables = COALESCE($3, variables),
-           sms_type = COALESCE($4, sms_type),
-           is_active = COALESCE($5, is_active),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $6
-       RETURNING *`,
-      [name, template, variables ? JSON.stringify(variables) : null, sms_type, is_active, id]
-    );
+    const data: Prisma.sms_templatesUpdateInput = {};
+    if (name !== undefined) data.name = name;
+    if (template !== undefined) data.template = template;
+    if (variables !== undefined) data.variables = variables ? JSON.parse(JSON.stringify(variables)) : Prisma.JsonNull;
+    if (sms_type !== undefined) data.sms_type = sms_type;
+    if (is_active !== undefined) data.is_active = is_active;
+    data.updated_at = new Date();
 
-    if (result.rows.length === 0) {
+    try {
+      const updated = await prisma.sms_templates.update({
+        where: { id },
+        data
+      });
+
+      logger.info(`SMS template updated: ${id} by ${req.user!.email}`);
+
+      const response: ApiResponse<SmsTemplate> = {
+        success: true,
+        message: 'SMS template updated successfully',
+        data: updated as any
+      };
+
+      res.json(response);
+    } catch (e) {
       throw new ApiError('SMS template not found', 404);
     }
-
-    logger.info(`SMS template updated: ${id} by ${req.user!.email}`);
-
-    const response: ApiResponse<SmsTemplate> = {
-      success: true,
-      message: 'SMS template updated successfully',
-      data: result.rows[0]
-    };
-
-    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -215,21 +226,24 @@ export const updateSmsTemplate = async (req: Request, res: Response, next: NextF
 export const deleteSmsTemplate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { id } = req.params;
+    if (!id) throw new ApiError('ID required', 400);
 
-    const result = await query('DELETE FROM sms_templates WHERE id = $1 RETURNING id', [id]);
+    try {
+      await prisma.sms_templates.delete({
+        where: { id }
+      });
 
-    if (result.rows.length === 0) {
+      logger.info(`SMS template deleted: ${id} by ${req.user!.email}`);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'SMS template deleted successfully'
+      };
+
+      res.json(response);
+    } catch (e) {
       throw new ApiError('SMS template not found', 404);
     }
-
-    logger.info(`SMS template deleted: ${id} by ${req.user!.email}`);
-
-    const response: ApiResponse = {
-      success: true,
-      message: 'SMS template deleted successfully'
-    };
-
-    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -240,26 +254,31 @@ export const subscribeSms = async (req: Request, res: Response, next: NextFuncti
     const { phone, crops, regions, alert_types } = req.body;
     const userId = req.user?.id;
 
-    const result = await query(
-      `INSERT INTO sms_subscriptions (phone, user_id, crops, regions, alert_types)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (phone) 
-       DO UPDATE SET 
-         crops = EXCLUDED.crops,
-         regions = EXCLUDED.regions,
-         alert_types = EXCLUDED.alert_types,
-         is_active = true,
-         updated_at = CURRENT_TIMESTAMP
-       RETURNING *`,
-      [phone, userId, JSON.stringify(crops || []), JSON.stringify(regions || []), JSON.stringify(alert_types || [])]
-    );
+    const subscription = await prisma.sms_subscriptions.upsert({
+      where: { phone },
+      update: {
+        crops: crops ? JSON.parse(JSON.stringify(crops)) : [],
+        regions: regions ? JSON.parse(JSON.stringify(regions)) : [],
+        alert_types: alert_types ? JSON.parse(JSON.stringify(alert_types)) : [],
+        is_active: true,
+        updated_at: new Date()
+      },
+      create: {
+        phone,
+        user_id: userId || null,
+        crops: crops ? JSON.parse(JSON.stringify(crops)) : [],
+        regions: regions ? JSON.parse(JSON.stringify(regions)) : [],
+        alert_types: alert_types ? JSON.parse(JSON.stringify(alert_types)) : [],
+        is_active: true
+      }
+    });
 
     logger.info(`SMS subscription created/updated: ${phone}`);
 
     const response: ApiResponse<SmsSubscription> = {
       success: true,
       message: 'SMS subscription updated successfully',
-      data: result.rows[0]
+      data: subscription as any
     };
 
     res.json(response);
@@ -273,24 +292,32 @@ export const getSmsSubscriptions = async (req: Request, res: Response, next: Nex
     const { page = 1, limit = 20, is_active = true } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
-    const result = await query(
-      `SELECT ss.*, u.full_name as user_name
-       FROM sms_subscriptions ss
-       LEFT JOIN users u ON ss.user_id = u.id
-       WHERE ss.is_active = $1
-       ORDER BY ss.created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [is_active, limit, offset]
-    );
+    const activeBool = String(is_active) === 'true';
 
-    const countResult = await query('SELECT COUNT(*) FROM sms_subscriptions WHERE is_active = $1', [is_active]);
-    const total = parseInt(countResult.rows[0].count);
+    const [subs, total] = await prisma.$transaction([
+      prisma.sms_subscriptions.findMany({
+        where: { is_active: activeBool },
+        include: {
+          users: { select: { full_name: true } }
+        },
+        orderBy: { created_at: 'desc' },
+        skip: offset,
+        take: Number(limit)
+      }),
+      prisma.sms_subscriptions.count({ where: { is_active: activeBool } })
+    ]);
+
     const pages = Math.ceil(total / Number(limit));
 
-    const response: ApiResponse<SmsSubscription[]> = {
+    const mappedSubs = subs.map(s => ({
+      ...s,
+      user_name: s.users?.full_name || null
+    }));
+
+    const response: ApiResponse<any[]> = {
       success: true,
       message: 'SMS subscriptions retrieved successfully',
-      data: result.rows,
+      data: mappedSubs,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -308,24 +335,28 @@ export const getSmsSubscriptions = async (req: Request, res: Response, next: Nex
 export const unsubscribeSms = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { phone } = req.params;
+    if (!phone) throw new ApiError('Phone required', 400);
 
-    const result = await query(
-      'UPDATE sms_subscriptions SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE phone = $1 RETURNING *',
-      [phone]
-    );
+    try {
+      await prisma.sms_subscriptions.update({
+        where: { phone },
+        data: {
+          is_active: false,
+          updated_at: new Date()
+        }
+      });
 
-    if (result.rows.length === 0) {
+      logger.info(`SMS unsubscribed: ${phone}`);
+
+      const response: ApiResponse = {
+        success: true,
+        message: 'Successfully unsubscribed from SMS alerts'
+      };
+
+      res.json(response);
+    } catch (e) {
       throw new ApiError('SMS subscription not found', 404);
     }
-
-    logger.info(`SMS unsubscribed: ${phone}`);
-
-    const response: ApiResponse = {
-      success: true,
-      message: 'Successfully unsubscribed from SMS alerts'
-    };
-
-    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -333,21 +364,27 @@ export const unsubscribeSms = async (req: Request, res: Response, next: NextFunc
 
 export const getSmsStats = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const stats = await Promise.all([
-      query('SELECT COUNT(*) FROM sms_logs WHERE DATE(created_at) = CURRENT_DATE'),
-      query('SELECT COUNT(*) FROM sms_subscriptions WHERE is_active = true'),
-      query('SELECT COUNT(*) FROM sms_logs WHERE status = $1', ['pending']),
-      query('SELECT COUNT(*) FROM sms_logs WHERE status = $1', ['failed'])
+    const [todaySent, activeSubscriptions, pending, failed] = await prisma.$transaction([
+      prisma.sms_logs.count({
+        where: {
+          created_at: {
+            gte: new Date(new Date().setHours(0, 0, 0, 0))
+          }
+        }
+      }),
+      prisma.sms_subscriptions.count({ where: { is_active: true } }),
+      prisma.sms_logs.count({ where: { status: 'pending' } }),
+      prisma.sms_logs.count({ where: { status: 'failed' } })
     ]);
 
     const response: ApiResponse = {
       success: true,
       message: 'SMS stats retrieved successfully',
       data: {
-        todaySent: parseInt(stats[0].rows[0].count),
-        activeSubscriptions: parseInt(stats[1].rows[0].count),
-        pending: parseInt(stats[2].rows[0].count),
-        failed: parseInt(stats[3].rows[0].count)
+        todaySent,
+        activeSubscriptions,
+        pending,
+        failed
       }
     };
 

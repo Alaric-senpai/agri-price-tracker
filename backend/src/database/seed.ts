@@ -1,6 +1,7 @@
-import { query } from './connection.js';
+import { prisma } from '../../lib/prisma';
 import { logger } from '../utils/logger';
 import bcrypt from 'bcryptjs';
+import { sms_type } from '../../generated/prisma/client';
 
 export const seedDatabase = async (): Promise<void> => {
   try {
@@ -18,10 +19,14 @@ export const seedDatabase = async (): Promise<void> => {
     ];
 
     for (const region of regions) {
-      await query(
-        `INSERT INTO regions (name, code) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`,
-        [region.name, region.code]
-      );
+      await prisma.regions.upsert({
+        where: { name: region.name },
+        update: {},
+        create: {
+          name: region.name,
+          code: region.code
+        }
+      });
     }
 
     // Seed crops
@@ -49,10 +54,14 @@ export const seedDatabase = async (): Promise<void> => {
     ];
 
     for (const crop of crops) {
-      await query(
-        `INSERT INTO crops (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`,
-        [crop.name, crop.category]
-      );
+      await prisma.crops.upsert({
+        where: { name: crop.name },
+        update: {},
+        create: {
+          name: crop.name,
+          category: crop.category
+        }
+      });
     }
 
     // Seed markets
@@ -76,35 +85,45 @@ export const seedDatabase = async (): Promise<void> => {
     ];
 
     for (const market of markets) {
-      const regionResult = await query(
-        `SELECT id FROM regions WHERE name = $1`,
-        [market.region]
-      );
-      
-      if (regionResult.rows.length > 0) {
-        await query(
-          `INSERT INTO markets (name, region_id) VALUES ($1, $2) ON CONFLICT (name, region_id) DO NOTHING`,
-          [market.name, regionResult.rows[0].id]
-        );
+      const region = await prisma.regions.findUnique({
+        where: { name: market.region }
+      });
+
+      if (region) {
+        await prisma.markets.upsert({
+          where: {
+            name_region_id: {
+              name: market.name,
+              region_id: region.id
+            }
+          },
+          update: {},
+          create: {
+            name: market.name,
+            region_id: region.id
+          }
+        });
       }
     }
 
     // Create super admin user
     const hashedPassword = await bcrypt.hash('admin123', 12);
-    await query(
-      `INSERT INTO users (email, password_hash, full_name, role, region, organization, is_active, email_verified) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (email) DO NOTHING`,
-      [
-        'admin@agriprice.co.ke',
-        hashedPassword,
-        'System Administrator',
-        'super_admin',
-        'Central Kenya',
-        'AgriPrice System',
-        true,
-        true
-      ]
-    );
+    const adminEmail = 'admin@agriprice.co.ke';
+
+    await prisma.users.upsert({
+      where: { email: adminEmail },
+      update: {},
+      create: {
+        email: adminEmail,
+        password_hash: hashedPassword,
+        full_name: 'System Administrator',
+        role: 'super_admin',
+        region: 'Central Kenya',
+        organization: 'AgriPrice System',
+        is_active: true,
+        email_verified: true
+      }
+    });
 
     // Seed SMS templates
     const smsTemplates = [
@@ -128,25 +147,23 @@ export const seedDatabase = async (): Promise<void> => {
       }
     ];
 
-    const adminResult = await query(
-      `SELECT id FROM users WHERE email = 'admin@agriprice.co.ke'`
-    );
+    const admin = await prisma.users.findUnique({
+      where: { email: adminEmail }
+    });
 
-    if (adminResult.rows.length > 0) {
-      const adminId = adminResult.rows[0].id;
-      
+    if (admin) {
       for (const template of smsTemplates) {
-        await query(
-          `INSERT INTO sms_templates (name, template, variables, sms_type, created_by) 
-           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING`,
-          [
-            template.name,
-            template.template,
-            JSON.stringify(template.variables),
-            template.type,
-            adminId
-          ]
-        );
+        await prisma.sms_templates.upsert({
+          where: { name: template.name },
+          update: {},
+          create: {
+            name: template.name,
+            template: template.template,
+            variables: template.variables, // Json type handling is automatic in Prisma
+            sms_type: template.type as sms_type,
+            created_by: admin.id
+          }
+        });
       }
     }
 
@@ -154,32 +171,36 @@ export const seedDatabase = async (): Promise<void> => {
     const systemSettings = [
       {
         key: 'kamis_sync_enabled',
-        value: JSON.stringify(true),
+        value: true,
         description: 'Enable automatic KAMIS data synchronization'
       },
       {
         key: 'sms_alerts_enabled',
-        value: JSON.stringify(true),
+        value: true,
         description: 'Enable SMS alert system'
       },
       {
         key: 'ml_predictions_enabled',
-        value: JSON.stringify(true),
+        value: true,
         description: 'Enable ML price predictions'
       },
       {
         key: 'max_price_variance',
-        value: JSON.stringify(50),
+        value: 50,
         description: 'Maximum price variance percentage for alerts'
       }
     ];
 
     for (const setting of systemSettings) {
-      await query(
-        `INSERT INTO system_settings (key, value, description) 
-         VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING`,
-        [setting.key, setting.value, setting.description]
-      );
+      await prisma.system_settings.upsert({
+        where: { key: setting.key },
+        update: {},
+        create: {
+          key: setting.key,
+          value: setting.value, // Json type handling
+          description: setting.description
+        }
+      });
     }
 
     logger.info('Database seeding completed successfully');
@@ -189,15 +210,25 @@ export const seedDatabase = async (): Promise<void> => {
   }
 };
 
-// Run seeding if this file is executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  seedDatabase()
-    .then(() => {
-      logger.info('Seeding completed');
-      process.exit(0);
-    })
-    .catch((error) => {
-      logger.error('Seeding failed:', error);
-      process.exit(1);
-    });
-}
+// // Run seeding if this file is executed directly
+// if (import.meta.url === `file://${process.argv[1]}`) {
+//   seedDatabase()
+//     .then(() => {
+//       logger.info('Seeding completed');
+//       process.exit(0);
+//     })
+//     .catch((error) => {
+//       logger.error('Seeding failed:', error);
+//       process.exit(1);
+//     });
+// }
+
+seedDatabase()
+  .then(async () => {
+    await prisma.$disconnect()
+  })
+  .catch(async (e) => {
+    console.error(e)
+    await prisma.$disconnect()
+    process.exit(1)
+  })

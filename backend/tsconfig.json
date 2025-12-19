@@ -10,7 +10,7 @@
     "isolatedModules": true,
     "noEmit": false,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": false,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -23,11 +23,13 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
   },
   "include": [
-    "src/**/*"
-, "../frontend/agri-price-tracker/src/app/environments"  ],
+    "src/**/*",
+    "lib/**/*",
+    "../frontend/agri-price-tracker/src/app/environments"
+  ],
   "exclude": [
     "node_modules",
     "dist",

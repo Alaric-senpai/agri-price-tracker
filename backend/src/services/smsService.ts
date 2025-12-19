@@ -1,9 +1,8 @@
 import axios from 'axios';
-import { pool } from '../database/connection';
-import { query } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { logger } from '../utils/logger';
 import { ApiError } from '../utils/apiError';
-
+import { Prisma } from '../../generated/prisma/client';
 
 interface SmsLog {
   recipient: string;
@@ -67,13 +66,30 @@ export const sendSmsMessage = async (
   }
 
   try {
-    const result = await pool.query(
-      `INSERT INTO sms_logs (recipient, message, sms_type, status, external_id, sent_by, error_message)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [formattedRecipient, message, smsType, status, externalId, sentBy, errorMsg]
-    );
-    return result.rows[0];
+    const log = await prisma.sms_logs.create({
+      data: {
+        recipient: formattedRecipient,
+        message,
+        sms_type: smsType as any,
+        status,
+        external_id: externalId || null,
+        sent_by: sentBy || null,
+        error_message: errorMsg || null,
+        sent_at: status === 'sent' ? new Date() : null
+      }
+    });
+
+    const resultLog: SmsLog = {
+      recipient: log.recipient,
+      message: log.message,
+      sms_type: log.sms_type,
+      status: (log.status as any) || 'pending'
+    };
+    if (log.external_id) resultLog.external_id = log.external_id;
+    if (log.sent_by) resultLog.sent_by = log.sent_by;
+    if (log.error_message) resultLog.error_message = log.error_message;
+
+    return resultLog;
   } catch (dbError) {
     logger.error('Failed to save SMS log', dbError);
     return { recipient, message, sms_type: smsType, status, external_id: externalId };
@@ -99,37 +115,41 @@ export const sendBulkSms = async (
 };
 
 export const subscribeUser = async (phone: string, cropIds: string[]) => {
-  const client = await pool.connect();
   try {
     const formattedPhone = formatPhoneNumber(phone);
 
-    const query = `
-      INSERT INTO sms_subscriptions (phone, crops, is_active, updated_at)
-      VALUES ($1, $2, true, NOW())
-      ON CONFLICT (phone) 
-      DO UPDATE SET crops = $2, is_active = true, updated_at = NOW()
-      RETURNING id;
-    `;
-
-    const result = await client.query(query, [formattedPhone, cropIds]);
+    const subscription = await prisma.sms_subscriptions.upsert({
+      where: { phone: formattedPhone },
+      update: {
+        crops: JSON.parse(JSON.stringify(cropIds)),
+        is_active: true,
+        updated_at: new Date()
+      },
+      create: {
+        phone: formattedPhone,
+        crops: JSON.parse(JSON.stringify(cropIds)),
+        is_active: true
+      }
+    });
 
     await sendSmsMessage(
       formattedPhone,
       `Welcome to AgriPrice! You are now tracking ${cropIds.length} crops. You will receive daily updates.`
     );
 
-    return result.rows[0];
+    return subscription;
   } catch (error) {
     logger.error('Subscription error:', error);
     throw new ApiError('Failed to subscribe user', 500);
-  } finally {
-    client.release();
   }
 };
 
 export const unsubscribeUser = async (phone: string) => {
   const formattedPhone = formatPhoneNumber(phone);
-  await pool.query('UPDATE sms_subscriptions SET is_active = false WHERE phone = $1', [formattedPhone]);
+  await prisma.sms_subscriptions.update({
+    where: { phone: formattedPhone },
+    data: { is_active: false }
+  });
   return true;
 };
 
@@ -138,18 +158,31 @@ export const getSubscribedNumbers = async (
   regionIds?: string[]
 ): Promise<string[]> => {
   try {
-    let whereConditions: string[] = ['is_active = true'];
-    const params: any[] = [];
-    let paramIndex = 1;
     if (cropNames && cropNames.length > 0) {
-      whereConditions.push(`crops && $${paramIndex++}::text[]`);
-      params.push(cropNames);
+      const subscriptions = await prisma.sms_subscriptions.findMany({
+        where: { is_active: true },
+        select: { phone: true, crops: true }
+      });
+
+      const targetSet = new Set(cropNames);
+      return subscriptions
+        .filter(sub => {
+          if (!sub.crops || !Array.isArray(sub.crops)) return false;
+          const subCrops = sub.crops as string[];
+          return subCrops.some(c => targetSet.has(c));
+        })
+        .map(s => s.phone);
     }
 
-    const queryStr = `SELECT DISTINCT phone FROM sms_subscriptions WHERE ${whereConditions.join(' AND ')}`;
-    const result = await pool.query(queryStr, params);
+    // If no crop filter, just return all active
+    const subs = await prisma.sms_subscriptions.findMany({
+      where: { is_active: true },
+      distinct: ['phone'],
+      select: { phone: true }
+    });
 
-    return result.rows.map(row => row.phone);
+    return subs.map(s => s.phone);
+
   } catch (error) {
     logger.error('❌ Failed to get subscribed numbers:', error);
     return [];
@@ -180,24 +213,35 @@ export const sendPriceAlert = async (
 
 export const sendDailyPriceUpdate = async (): Promise<void> => {
   try {
-    const priceChanges = await pool.query(`
-      SELECT c.name as crop_name, pe.price, r.name as region_name
-      FROM price_entries pe
-      JOIN crops c ON pe.crop_id = c.id
-      JOIN regions r ON pe.region_id = r.id
-      WHERE pe.entry_date = CURRENT_DATE AND pe.is_verified = true
-      ORDER BY pe.created_at DESC
-      LIMIT 5
-    `);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
-    if (priceChanges.rows.length === 0) {
+    const priceChanges = await prisma.price_entries.findMany({
+      where: {
+        entry_date: {
+          gte: today,
+          lt: tomorrow
+        },
+        is_verified: true
+      },
+      include: {
+        crops: { select: { name: true } },
+        regions: { select: { name: true } }
+      },
+      orderBy: { created_at: 'desc' },
+      take: 5
+    });
+
+    if (priceChanges.length === 0) {
       logger.info('ℹ️ No price updates to send today');
       return;
     }
 
     let message = 'AGRI UPDATE: Today\'s prices: ';
-    const priceList = priceChanges.rows
-      .map(row => `${row.crop_name}: ${row.price}/= (${row.region_name})`)
+    const priceList = priceChanges
+      .map(entry => `${entry.crops.name}: ${entry.price}/= (${entry.regions.name})`)
       .join(', ');
 
     message += priceList;
@@ -215,8 +259,15 @@ export const sendDailyPriceUpdate = async (): Promise<void> => {
 export const processSmsWebhook = async (req: any): Promise<void> => {
   try {
     const { id, status, phoneNumber } = req.body;
-    await
-      query('UPDATE sms_logs SET status = $1, delivered_at = CURRENT_TIMESTAMP WHERE external_id = $2', [status, id]);
+
+    await prisma.sms_logs.updateMany({
+      where: { external_id: id },
+      data: {
+        status: status, // Ensure status matches enum if strict
+        delivered_at: new Date()
+      }
+    });
+
     logger.info(`📬 Delivery report updated: ${id} - ${status} (${phoneNumber})`);
   }
   catch (error) { logger.error('❌ Failed to process SMS webhook:', error); }

@@ -1,4 +1,4 @@
-import { query, transaction } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { logger } from '../utils/logger';
 import { parse as csvParseSync } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
@@ -8,20 +8,21 @@ import { exec } from 'child_process';
 import util from 'util';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { Prisma } from '../../generated/prisma/client';
 
 const execPromise = util.promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
- 
+
 const PROJECT_ROOT = path.resolve(__dirname, '../../');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data/raw');
 const LATEST_FILE = path.join(DATA_DIR, 'kamis_latest.csv');
-const SCRAPER_SCRIPT = path.join(PROJECT_ROOT, 'src/scripts/kamis_scraper_optimized.py'); 
- 
+const SCRAPER_SCRIPT = path.join(PROJECT_ROOT, 'src/scripts/kamis_scraper_optimized.py');
+
 const categorizeCrop = (commodityName: string): string => {
   const lowerName = (commodityName || '').toLowerCase();
-  
+
   if (lowerName.match(/fertilizer/)) return 'farm_inputs';
   if (lowerName.match(/sunflower cake|cotton seed cake|bran|pollard/)) return 'animal_feeds';
   if (lowerName.match(/oil|cooking fat/)) return 'processed_products';
@@ -49,7 +50,7 @@ const determineUnit = (category: string, commodityName: string): string => {
   if (lowerName.match(/timber|post|pole|pineapple|watermelon|coconut|pumpkin|butternut|cabbage/)) return 'piece';
   return 'kg';
 };
- 
+
 
 export const syncKamisData = async (): Promise<any> => {
   const syncId = await startSyncLog();
@@ -57,30 +58,30 @@ export const syncKamisData = async (): Promise<any> => {
   try {
     logger.info('🔄 Starting KAMIS data synchronization...');
     logger.info(`   Script Path: ${SCRAPER_SCRIPT}`);
- 
+
     try {
-        const { stdout, stderr } = await execPromise(`python "${SCRAPER_SCRIPT}"`);
-        logger.info(`Scraper stdout: ${stdout}`);
-        if (stderr && !stderr.includes("UserWarning")) {
-             logger.warn(`Scraper stderr: ${stderr}`);
-        }
+      const { stdout, stderr } = await execPromise(`python "${SCRAPER_SCRIPT}"`);
+      logger.info(`Scraper stdout: ${stdout}`);
+      if (stderr && !stderr.includes("UserWarning")) {
+        logger.warn(`Scraper stderr: ${stderr}`);
+      }
     } catch (err: any) {
-        logger.error(`Scraper execution failed: ${err.message}`); 
+      logger.error(`Scraper execution failed: ${err.message}`);
     }
- 
+
     if (!fs.existsSync(LATEST_FILE)) {
-        throw new Error('Scraper finished but no output file found at ' + LATEST_FILE);
+      throw new Error('Scraper finished but no output file found at ' + LATEST_FILE);
     }
- 
+
     const fileBuffer = fs.readFileSync(LATEST_FILE);
     const result = await processKamisFile(fileBuffer, 'kamis_latest.csv');
- 
+
     await updateSyncLog(syncId, result.total_rows, result.inserted, 0, 'completed');
     logger.info(`KAMIS sync completed: ${result.inserted} inserted.`);
-    
-    return { 
-        records_synced: result.inserted,
-        details: result 
+
+    return {
+      records_synced: result.inserted,
+      details: result
     };
 
   } catch (error: any) {
@@ -89,11 +90,11 @@ export const syncKamisData = async (): Promise<any> => {
     throw error;
   }
 };
- 
+
 export async function processKamisFile(buffer: Buffer, filename: string) {
   const ext = (path.extname(filename) || '').toLowerCase();
   let rows: any[] = [];
- 
+
   try {
     if (ext === '.xlsx' || ext === '.xls') {
       const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -108,93 +109,128 @@ export async function processKamisFile(buffer: Buffer, filename: string) {
       rows = XLSX.utils.sheet_to_json(sheet, { defval: null });
     } else {
       const text = buffer.toString('utf8');
-      const cleanText = text.replace(/^\uFEFF/, '');  
+      const cleanText = text.replace(/^\uFEFF/, '');
       rows = csvParseSync(cleanText, { columns: true, skip_empty_lines: true, trim: true });
     }
   } catch (err) {
     throw new Error('Failed to parse file: ' + String(err));
   }
- 
-  return await transaction(async (client) => {
+
+  return await prisma.$transaction(async (tx) => {
     let insertedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
 
     for (const rawRow of rows) {
-      try { 
+      try {
         const row: any = {};
         for (const k of Object.keys(rawRow)) {
           row[k.toLowerCase().trim()] = rawRow[k];
         }
- 
+
         const cropName = (row.crop || row.crop_name || row['commodity'] || row['crop name'] || row['productname'] || '').toString().trim();
         const regionName = (row.region || row.region_name || row['county'] || row['district'] || '').toString().trim();
         const marketName = (row.market || row.market_name || row['market name'] || '').toString().trim();
-        
+
         const priceRaw = row.price ?? row['unit price'] ?? row['wholesale'] ?? row['retail'];
         const priceVal = parseFloat(String(priceRaw).replace(/,/g, ''));
 
         const dateRaw = row.entry_date || row.date || row['date'] || new Date();
-        const entryDate = new Date(dateRaw).toISOString();
+        const entryDate = new Date(dateRaw);
 
         if (!cropName || !regionName || isNaN(priceVal)) {
           skippedCount++;
           continue;
         }
- 
+
         let cropId;
-        const cropRes = await client.query('SELECT id FROM crops WHERE LOWER(name) = LOWER($1)', [cropName]);
-        if (cropRes.rows.length > 0) {
-          cropId = cropRes.rows[0].id;
+        const cropRes = await tx.crops.findFirst({
+          where: { name: { equals: cropName, mode: 'insensitive' } },
+          select: { id: true }
+        });
+
+        if (cropRes) {
+          cropId = cropRes.id;
         } else {
           const cat = categorizeCrop(cropName);
           const unit = determineUnit(cat, cropName);
-          const newCrop = await client.query(
-             'INSERT INTO crops(name, category, unit, is_active) VALUES ($1, $2, $3, true) RETURNING id', 
-             [cropName, cat, unit]
-          );
-          cropId = newCrop.rows[0].id;
+          const newCrop = await tx.crops.create({
+            data: { name: cropName, category: cat, unit, is_active: true }
+          });
+          cropId = newCrop.id;
         }
- 
+
         let regionId;
-        const regionRes = await client.query('SELECT id FROM regions WHERE LOWER(name) = LOWER($1)', [regionName]);
-        if (regionRes.rows.length > 0) {
-          regionId = regionRes.rows[0].id;
+        const regionRes = await tx.regions.findFirst({
+          where: { name: { equals: regionName, mode: 'insensitive' } },
+          select: { id: true }
+        });
+
+        if (regionRes) {
+          regionId = regionRes.id;
         } else {
-          const newRegion = await client.query(
-             'INSERT INTO regions(name, code, is_active) VALUES ($1, $2, true) RETURNING id',
-             [regionName, regionName.toUpperCase().replace(/\s/g, '_')]
-          );
-          regionId = newRegion.rows[0].id;
+          const newRegion = await tx.regions.create({
+            data: {
+              name: regionName,
+              code: regionName.toUpperCase().replace(/\s/g, '_'),
+              is_active: true
+            }
+          });
+          regionId = newRegion.id;
         }
- 
+
         let marketId = null;
         if (marketName) {
-            const marketRes = await client.query('SELECT id FROM markets WHERE LOWER(name) = LOWER($1) AND region_id = $2', [marketName, regionId]);
-            if (marketRes.rows.length > 0) {
-                marketId = marketRes.rows[0].id;
-            } else {
-                const newMarket = await client.query(
-                    'INSERT INTO markets(name, region_id, is_active) VALUES ($1, $2, true) RETURNING id',
-                    [marketName, regionId]
-                );
-                marketId = newMarket.rows[0].id;
-            }
-        } 
-        const dupCheck = await client.query(
-            `SELECT id FROM price_entries WHERE crop_id=$1 AND region_id=$2 AND market_id IS NOT DISTINCT FROM $3 AND DATE(entry_date)=DATE($4)`,
-            [cropId, regionId, marketId, entryDate]
-        );
+          const marketRes = await tx.markets.findFirst({
+            where: {
+              name: { equals: marketName, mode: 'insensitive' },
+              region_id: regionId
+            },
+            select: { id: true }
+          });
 
-        if (dupCheck.rows.length === 0) {
-            await client.query(
-                `INSERT INTO price_entries (crop_id, region_id, market_id, price, entry_date, source, is_verified)
-                 VALUES ($1, $2, $3, $4, $5, 'kamis', true)`,
-                [cropId, regionId, marketId, priceVal, entryDate]
-            );
-            insertedCount++;
+          if (marketRes) {
+            marketId = marketRes.id;
+          } else {
+            const newMarket = await tx.markets.create({
+              data: { name: marketName, region_id: regionId, is_active: true }
+            });
+            marketId = newMarket.id;
+          }
+        }
+
+        const startOfDay = new Date(entryDate); startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(entryDate); endOfDay.setHours(23, 59, 59, 999);
+
+        const dupCheck = await tx.price_entries.findFirst({
+          where: {
+            crop_id: cropId,
+            region_id: regionId,
+            market_id: marketId,
+            entry_date: {
+              gte: startOfDay,
+              lte: endOfDay
+            }
+          },
+          select: { id: true }
+        });
+
+        if (!dupCheck) {
+          await tx.price_entries.create({
+            data: {
+              crop_id: cropId,
+              region_id: regionId,
+              market_id: marketId,
+              price: priceVal,
+              entry_date: entryDate,
+              source: 'kamis',
+              is_verified: true,
+              unit: 'kg'
+            }
+          });
+          insertedCount++;
         } else {
-            skippedCount++;
+          skippedCount++;
         }
 
       } catch (rowError) {
@@ -209,50 +245,51 @@ export async function processKamisFile(buffer: Buffer, filename: string) {
       errors: errorCount,
       total_rows: rows.length
     };
+  }, {
+    timeout: 20000
   });
 }
- 
 
-const startSyncLog = async (): Promise<string> => { 
-    await query(`CREATE TABLE IF NOT EXISTS kamis_sync_logs (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        started_at TIMESTAMP DEFAULT NOW(),
-        completed_at TIMESTAMP,
-        records_processed INT DEFAULT 0,
-        records_inserted INT DEFAULT 0,
-        records_updated INT DEFAULT 0,
-        status VARCHAR(50),
-        error_message TEXT
-    )`);
 
-    const result = await query(
-      'INSERT INTO kamis_sync_logs (status) VALUES ($1) RETURNING id',
-      ['running']
-    );
-    return result.rows[0].id;
+const startSyncLog = async (): Promise<string> => {
+  const log = await prisma.kamis_sync_logs.create({
+    data: {
+      status: 'running',
+      started_at: new Date(),
+      sync_date: new Date()
+    }
+  });
+  return log.id;
 };
-  
+
 const updateSyncLog = async (id: string, processed: number, inserted: number, updated: number, status: string, errorMessage?: string) => {
-    await query(
-      `UPDATE kamis_sync_logs 
-       SET records_processed = $1, records_inserted = $2, records_updated = $3, 
-           status = $4, error_message = $5, completed_at = CURRENT_TIMESTAMP
-       WHERE id = $6`,
-      [processed, inserted, updated, status, errorMessage, id]
-    );
+  await prisma.kamis_sync_logs.update({
+    where: { id },
+    data: {
+      records_processed: processed,
+      records_inserted: inserted,
+      records_updated: updated,
+      status,
+      error_message: errorMessage || null,
+      completed_at: new Date()
+    }
+  });
 };
 
 export const getKamisSyncStatus = async (): Promise<any> => {
-    try {
-        const result = await query('SELECT * FROM kamis_sync_logs ORDER BY started_at DESC LIMIT 1');
-        if (result.rows.length === 0) return { last_sync: null, records_synced: 0, is_active: false };
-        const row = result.rows[0];
-        return {
-            last_sync: row.started_at,
-            records_synced: (row.records_inserted || 0) + (row.records_updated || 0),
-            is_active: row.status === 'running'
-        };
-    } catch (e) {
-        return { last_sync: null, records_synced: 0, is_active: false };
-    }
+  try {
+    const row = await prisma.kamis_sync_logs.findFirst({
+      orderBy: { started_at: 'desc' }
+    });
+
+    if (!row) return { last_sync: null, records_synced: 0, is_active: false };
+
+    return {
+      last_sync: row.started_at,
+      records_synced: (row.records_inserted || 0) + (row.records_updated || 0),
+      is_active: row.status === 'running'
+    };
+  } catch (e) {
+    return { last_sync: null, records_synced: 0, is_active: false };
+  }
 };

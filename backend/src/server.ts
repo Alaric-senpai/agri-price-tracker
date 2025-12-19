@@ -4,6 +4,8 @@ import helmet from 'helmet';
 import compression from 'compression';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
+import swaggerUi from 'swagger-ui-express';
+import swaggerSpec from '../lib/swagger';
 
 import { logger } from './utils/logger';
 import { errorHandler } from './middleware/errorHandler';
@@ -11,6 +13,7 @@ import { rateLimiter } from './middleware/rateLimiter';
 import { requestLogger } from './middleware/requestLogger';
 import { connectDatabase } from './database/connection';
 import { startCronJobs } from './services/cronService';
+import { VercelRequest, VercelResponse } from '@vercel/node';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -30,7 +33,7 @@ import statsRoutes from './routes/stats';
 // Load environment variables
 dotenv.config();
 
-const app = express();
+const app: express.Application = express();
 const PORT = process.env.PORT || 3000;
 const API_VERSION = process.env.API_VERSION || 'v1';
 
@@ -57,8 +60,18 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Request logging
 app.use(requestLogger);
 
+
+
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  app(req, res);
+}
+
+
 // Rate limiting
 app.use(rateLimiter);
+
+// API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -104,7 +117,7 @@ const server = createServer(app);
 // Graceful shutdown
 const gracefulShutdown = (signal: string) => {
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
-  
+
   server.close(() => {
     logger.info('HTTP server closed');
     process.exit(0);
@@ -116,6 +129,8 @@ const gracefulShutdown = (signal: string) => {
     process.exit(1);
   }, 30000);
 };
+
+
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));

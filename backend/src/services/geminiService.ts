@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { query } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { logger } from '../utils/logger';
 import type { ChatMessage } from '../types/index';
 
@@ -107,7 +107,7 @@ Now, as AgriBot, respond helpfully using the Kenyan context and available data.
 
 const getCurrentPriceContext = async (): Promise<string> => {
   try {
-    const result = await query(`
+    const rows = await prisma.$queryRaw<any[]>`
       SELECT c.name AS crop_name, pe.price, r.name AS region_name, pe.entry_date
       FROM price_entries pe
       JOIN crops c ON pe.crop_id = c.id
@@ -122,15 +122,14 @@ const getCurrentPriceContext = async (): Promise<string> => {
         GROUP BY c2.name, r2.name
       )
       ORDER BY pe.entry_date DESC;
+    `;
 
-    `);
-
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return 'No recent price data available.';
     }
 
-    const priceContext = result.rows.map(row =>
-      `${row.crop_name}: KSh ${row.price}/kg in ${row.region_name} (${row.entry_date})`
+    const priceContext = rows.map(row =>
+      `${row.crop_name}: KSh ${row.price}/kg in ${row.region_name} (${new Date(row.entry_date).toDateString()})`
     ).join('\n');
 
     return priceContext;
@@ -188,21 +187,29 @@ What would you like to know about agricultural pricing today?`;
 
 export const analyzePriceTrends = async (cropId: string, regionId: string): Promise<string> => {
   try {
-    const result = await query(`
-      SELECT price, entry_date
-      FROM price_entries
-      WHERE crop_id = $1 AND region_id = $2 AND is_verified = true
-      ORDER BY entry_date DESC
-      LIMIT 30
-    `, [cropId, regionId]);
+    const result = await prisma.price_entries.findMany({
+      where: {
+        crop_id: cropId,
+        region_id: regionId,
+        is_verified: true
+      },
+      select: {
+        price: true,
+        entry_date: true
+      },
+      orderBy: {
+        entry_date: 'desc'
+      },
+      take: 30
+    });
 
-    if (result.rows.length < 2) {
+    if (result.length < 2) {
       return 'Insufficient data for trend analysis.';
     }
 
-    const prices = result.rows.map(row => row.price);
-    const latest = prices[0];
-    const previous = prices[1];
+    const prices = result.map(row => Number(row.price));
+    const latest = prices[0]!;
+    const previous = prices[1]!;
     const average = prices.reduce((sum, price) => sum + price, 0) / prices.length;
 
     const trend = latest > previous ? 'increasing' : latest < previous ? 'decreasing' : 'stable';

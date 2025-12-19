@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { prisma } from '../../lib/prisma';
 import { logger } from '../utils/logger';
 import { sendDailyPriceUpdate } from './smsService';
 import { syncKamisData } from './kamisService';
@@ -52,23 +53,42 @@ export const startCronJobs = (): void => {
 
 const cleanupOldLogs = async (): Promise<void> => {
   try {
-    const { query } = await import('../database/connection.js');
-    
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
     // Delete SMS logs older than 90 days
-    await query('DELETE FROM sms_logs WHERE created_at < NOW() - INTERVAL \'90 days\'');
-    
+    await prisma.sms_logs.deleteMany({
+      where: { created_at: { lt: ninetyDaysAgo } }
+    });
+
     // Delete chat conversations older than 30 days (for anonymous users)
-    await query('DELETE FROM chat_conversations WHERE user_id IS NULL AND created_at < NOW() - INTERVAL \'30 days\'');
-    
+    await prisma.chat_conversations.deleteMany({
+      where: {
+        user_id: null,
+        created_at: { lt: thirtyDaysAgo }
+      }
+    });
+
     // Delete old KAMIS sync logs (keep last 100)
-    await query(`
-      DELETE FROM kamis_sync_logs 
-      WHERE id NOT IN (
-        SELECT id FROM kamis_sync_logs 
-        ORDER BY started_at DESC 
-        LIMIT 100
-      )
-    `);
+    // First, find the IDs of the 100 most recent logs
+    const logsToKeep = await prisma.kamis_sync_logs.findMany({
+      select: { id: true },
+      orderBy: { started_at: 'desc' },
+      take: 100
+    });
+
+    if (logsToKeep.length === 100) {
+      const idsToKeep = logsToKeep.map(log => log.id);
+
+      await prisma.kamis_sync_logs.deleteMany({
+        where: {
+          id: { notIn: idsToKeep }
+        }
+      });
+    }
 
     logger.info('Cleanup completed successfully');
   } catch (error) {

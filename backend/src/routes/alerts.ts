@@ -3,9 +3,30 @@ import { authenticate, requireAdmin } from '../middleware/auth';
 import { query } from '../database/connection';
 import type { ApiResponse } from '../types/index';
 
-const router = Router();
+const router: Router = Router();
 
 // Get system alerts (admin only)
+/**
+ * @swagger
+ * tags:
+ *   name: Alerts
+ *   description: System alerts and notifications
+ */
+
+/**
+ * @swagger
+ * /admin/alerts:
+ *   get:
+ *     summary: Get system alerts (admin only)
+ *     tags: [Alerts]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of system alerts
+ *       403:
+ *         description: Admin access required
+ */
 router.get('/', authenticate, requireAdmin, async (req, res, next) => {
   try {
     // 1. KAMIS sync failures

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { query, transaction } from '../database/connection';
+import { prisma } from '../../lib/prisma';
 import { ApiError } from '../utils/apiError';
 import { generateToken, generateRefreshToken } from '../middleware/auth';
 import { logger } from '../utils/logger';
@@ -9,13 +9,22 @@ import { sendEmail } from '../services/emailService';
 import { sendSmsMessage } from '../services/smsService';
 import type { User, CreateUserRequest, LoginRequest, AuthResponse, ApiResponse } from '../types/index';
 
+/**
+ * Register a new user
+ * @param req - The request object
+ * @param res - The response object
+ * @param next - The next function
+ */
 export const register = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email, password, full_name, phone, region, organization }: CreateUserRequest = req.body;
 
     // Check if user already exists
-    const existingUser = await query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existingUser.rows.length > 0) {
+    const existingUser = await prisma.users.findUnique({
+      where: { email }
+    });
+
+    if (existingUser) {
       throw new ApiError('User already exists with this email', 409);
     }
 
@@ -23,18 +32,26 @@ export const register = async (req: Request, res: Response, next: NextFunction):
     const passwordHash = await bcrypt.hash(password, 12);
 
     // Create user
-    const result = await query(
-      `INSERT INTO users (email, password_hash, full_name, phone, region, organization) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
-       RETURNING id, email, full_name, phone, role, region, organization, is_active, email_verified, created_at`,
-      [email, passwordHash, full_name, phone, region, organization]
-    );
+    const user = await prisma.users.create({
+      data: {
+        email,
+        password_hash: passwordHash,
+        full_name,
+        phone: phone ?? null,
+        region: region ?? null,
+        organization: organization ?? null,
 
-    const user = result.rows[0] as User;
+        is_active: true, // Default to true as per SQL logic implies (though SQL didn't set it explicitly, existing code returned it. schema usually has default)
+        email_verified: false, // Default
+        role: 'farmer' // Default role
+      }
+    });
 
     // Generate tokens
-    const token = generateToken(user);
-    const refreshToken = generateRefreshToken(user);
+    // Cast to User type if needed, but Prisma result should be compatible 
+    // except for Date fields which are Date objects in Prisma vs potentially strings in some raw driver settings, but here types say Date.
+    const token = generateToken(user as unknown as User);
+    const refreshToken = generateRefreshToken(user as unknown as User);
 
     logger.info(`New user registered: ${email}`);
 
@@ -42,7 +59,7 @@ export const register = async (req: Request, res: Response, next: NextFunction):
       success: true,
       message: 'User registered successfully',
       data: {
-        user,
+        user: user as unknown as User,
         token,
         refreshToken
       }
@@ -54,23 +71,26 @@ export const register = async (req: Request, res: Response, next: NextFunction):
   }
 };
 
+/**
+ * 
+ * login functionality
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const login = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email, password }: LoginRequest = req.body;
 
     // Get user with password
-    const result = await query(
-      `SELECT id, email, password_hash, full_name, phone, role, region, organization, 
-              is_active, email_verified, last_login, created_at, updated_at
-       FROM users WHERE email = $1`,
-      [email]
-    );
+    const user = await prisma.users.findUnique({
+      where: { email }
+    });
 
-    if (result.rows.length === 0) {
+    if (!user) {
       throw new ApiError('Invalid credentials', 401);
     }
-
-    const user = result.rows[0];
 
     // Check if user is active
     if (!user.is_active) {
@@ -84,14 +104,17 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
     }
 
     // Update last login
-    await query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
+    await prisma.users.update({
+      where: { id: user.id },
+      data: { last_login: new Date() }
+    });
 
     // Remove password from user object
     const { password_hash, ...userWithoutPassword } = user;
 
     // Generate tokens
-    const token = generateToken(userWithoutPassword);
-    const refreshToken = generateRefreshToken(userWithoutPassword);
+    const token = generateToken(userWithoutPassword as unknown as User);
+    const refreshToken = generateRefreshToken(userWithoutPassword as unknown as User);
 
     logger.info(`User logged in: ${email}`);
 
@@ -99,7 +122,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       success: true,
       message: 'Login successful',
       data: {
-        user: userWithoutPassword,
+        user: userWithoutPassword as unknown as User,
         token,
         refreshToken
       }
@@ -111,6 +134,14 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
   }
 };
 
+/**
+ * 
+ * handle refresh token generation
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const refreshToken = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { refreshToken } = req.body;
@@ -119,7 +150,8 @@ export const refreshToken = async (req: Request, res: Response, next: NextFuncti
       throw new ApiError('Refresh token is required', 400);
     }
 
-    // Verify refresh token  
+    // Verify refresh token logic would go here
+
     const response: ApiResponse = {
       success: true,
       message: 'Token refreshed successfully'
@@ -131,6 +163,14 @@ export const refreshToken = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
+/**
+ * 
+ * get current logged in users profile
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const getProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const response: ApiResponse<User> = {
@@ -145,27 +185,34 @@ export const getProfile = async (req: Request, res: Response, next: NextFunction
   }
 };
 
+/**
+ * 
+ * update current logged in users profile
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const updateProfile = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { full_name, phone, region, organization } = req.body;
     const userId = req.user!.id;
 
-    const result = await query(
-      `UPDATE users 
-       SET full_name = COALESCE($1, full_name),
-           phone = COALESCE($2, phone),
-           region = COALESCE($3, region),
-           organization = COALESCE($4, organization),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5
-       RETURNING id, email, full_name, phone, role, region, organization, is_active, email_verified, created_at, updated_at`,
-      [full_name, phone, region, organization, userId]
-    );
+    const updatedUser = await prisma.users.update({
+      where: { id: userId },
+      data: {
+        full_name,
+        phone,
+        region,
+        organization,
+        updated_at: new Date()
+      }
+    });
 
     const response: ApiResponse<User> = {
       success: true,
       message: 'Profile updated successfully',
-      data: result.rows[0]
+      data: updatedUser as unknown as User
     };
 
     res.json(response);
@@ -174,14 +221,27 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
   }
 };
 
+
+/**
+ * change password
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const changePassword = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { current_password, new_password } = req.body;
     const userId = req.user!.id;
 
     // Get current password hash
-    const result = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
-    const user = result.rows[0];
+    const user = await prisma.users.findUnique({
+      where: { id: userId }
+    });
+
+    if (!user) {
+      throw new ApiError('User not found', 404);
+    }
 
     // Verify current password
     const isValidPassword = await bcrypt.compare(current_password, user.password_hash);
@@ -193,10 +253,13 @@ export const changePassword = async (req: Request, res: Response, next: NextFunc
     const newPasswordHash = await bcrypt.hash(new_password, 12);
 
     // Update password
-    await query(
-      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [newPasswordHash, userId]
-    );
+    await prisma.users.update({
+      where: { id: userId },
+      data: {
+        password_hash: newPasswordHash,
+        updated_at: new Date()
+      }
+    });
 
     const response: ApiResponse = {
       success: true,
@@ -209,6 +272,15 @@ export const changePassword = async (req: Request, res: Response, next: NextFunc
   }
 };
 
+
+/**
+ * forgot password
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ * @returns 
+ */
 export const forgotPassword = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email } = req.body;
@@ -216,8 +288,10 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
     if (!email) {
       throw new ApiError('Email is required', 400);
     }
-    const userResult = await query('SELECT id, full_name, phone FROM users WHERE email = $1', [email]);
-    const user = userResult.rows[0];
+
+    const user = await prisma.users.findUnique({
+      where: { email }
+    });
 
     const genericResponse: ApiResponse = {
       success: true,
@@ -229,16 +303,22 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
       res.json(genericResponse);
       return;
     }
-    await transaction(async (client) => {
+
+    await prisma.$transaction(async (tx) => {
       const resetToken = crypto.randomBytes(32).toString('hex');
       const tokenExpiration = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-      await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user.id]);
-      await client.query(
-        `INSERT INTO password_reset_tokens (user_id, token, expires_at) 
-         VALUES ($1, $2, $3)`,
-        [user.id, resetToken, tokenExpiration]
-      );
+      await tx.password_reset_tokens.deleteMany({
+        where: { user_id: user.id }
+      });
+
+      await tx.password_reset_tokens.create({
+        data: {
+          user_id: user.id,
+          token: resetToken,
+          expires_at: tokenExpiration
+        }
+      });
 
       const resetUrl = `${process.env.CORS_ORIGIN}/#/reset-password?token=${resetToken}&email=${email}`;
 
@@ -291,7 +371,14 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
   }
 };
 
-
+/**
+ * 
+ * reset password
+ * 
+ * @param req 
+ * @param res 
+ * @param next 
+ */
 export const resetPassword = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { token, email, new_password } = req.body;
@@ -300,35 +387,36 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
       throw new ApiError('Token, email, and new password are required', 400);
     }
 
-    const tokenResult = await query(
-      `SELECT t.user_id, t.expires_at 
-             FROM password_reset_tokens t
-             JOIN users u ON t.user_id = u.id
-             WHERE t.token = $1 AND u.email = $2`,
-      [token, email]
-    );
+    // Find the token and associated user
+    const resetTokenRecord = await prisma.password_reset_tokens.findFirst({
+      where: { token },
+      include: { users: true }
+    });
 
-    if (tokenResult.rows.length === 0) {
+    if (!resetTokenRecord || !resetTokenRecord.users || resetTokenRecord.users.email !== email) {
       throw new ApiError('Invalid or already used password reset token', 400);
     }
 
-    const resetTokenRecord = tokenResult.rows[0];
-    const userId = resetTokenRecord.user_id;
-
     if (new Date(resetTokenRecord.expires_at).getTime() < Date.now()) {
-      await query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+      await prisma.password_reset_tokens.deleteMany({ where: { user_id: resetTokenRecord.user_id } });
       throw new ApiError('Password reset token has expired', 400);
     }
 
     const newPasswordHash = await bcrypt.hash(new_password, 12);
+    const userId = resetTokenRecord.user_id;
 
-    await transaction(async (client) => {
-      await client.query(
-        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [newPasswordHash, userId]
-      );
+    await prisma.$transaction(async (tx) => {
+      await tx.users.update({
+        where: { id: userId },
+        data: {
+          password_hash: newPasswordHash,
+          updated_at: new Date()
+        }
+      });
 
-      await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+      await tx.password_reset_tokens.deleteMany({
+        where: { user_id: userId }
+      });
     });
 
     logger.info(`Password successfully reset for user ID: ${userId}`);
