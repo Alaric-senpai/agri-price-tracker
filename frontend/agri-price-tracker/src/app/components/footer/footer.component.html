@@ -1,60 +1,117 @@
-   <footer class="footer">
-      <div class="container">
-        <div class="footer-content">
-          <div class="footer-section">
-            <h3>AgriPrice System</h3>
-            <p>Empowering farmers with transparent pricing information and direct market access. 
-               Fighting middleman exploitation through technology.</p>
-            <div class="social-links">
-              <a href="https://www.facebook.com/" class="social-link">
-                <i class="fab fa-facebook"></i>
-              </a>
-              <a href="https://x.com/home" class="social-link">
-                <i class="fab fa-twitter"></i>
-              </a>
-              <a href="https://www.instagram.com/" class="social-link">
-                <i class="fab fa-instagram"></i>
-              </a>
-              <a href="https://www.linkedin.com/feed" class="social-link">
-                <i class="fab fa-linkedin"></i>
-              </a>
-            </div>
+<footer class="bg-[#052e16] text-white pt-24 pb-12 rounded-t-[3rem] mt-[-2rem] relative z-10">
+  <div class="container mx-auto px-6 lg:px-12">
+
+    <!-- Top Section: Brand & Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 lg:gap-8 mb-20 border-b border-white/10 pb-16">
+
+      <!-- Brand Column -->
+      <div class="space-y-6">
+        <a routerLink="/" class="flex items-center gap-3 no-underline">
+          <div
+            class="w-12 h-12 bg-[#bef264] rounded-full flex items-center justify-center text-emerald-950 shadow-lg shadow-[#bef264]/20 transition-transform hover:scale-105">
+            <i class="fas fa-leaf text-xl"></i>
           </div>
-          
-          <div class="footer-section">
-            <h4>System Modules</h4>
-            <ul>
-              <li><a href="#" (click)="navigateToPage('public')">Public Portal</a></li>
-              <li><a href="#" (click)="handleAdminDashboard()">Admin Dashboard</a></li>
-              <li><a href="#" (click)="navigateToSection('sms')">SMS Interface</a></li>
-            </ul>
-          </div>
-          
-          <div class="footer-section">
-            <h4>Features</h4>
-            <ul>
-              <li><a href="#" (click)="navigateToSection('prices')">Price Tracking</a></li>
-              <li><a href="#" (click)="navigateToSection('predictions')">ML Predictions</a></li>
-              <li><a href="#" (click)="openChatbot()">AI Chatbot</a></li>
-              <li><a href="#" (click)="navigateToPage('public')">KAMIS Integration</a></li>
-            </ul>
-          </div>
-          
-          <div class="footer-section">
-            <h4>Support</h4>
-            <div class="contact-info">
-              <p><i class="fas fa-phone"></i> SMS: +254-700-AGRI (2474)</p>
-              <p><i class="fas fa-envelope"></i>agriculture.price.system&#64;gmail.com</p>
-              <p><i class="fas fa-map-marker-alt"></i> Agricultural Technology Hub, Kenya</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="footer-bottom">
-          <p>&copy; 2025 AgriPrice Agricultural Price Tracking System. All rights reserved. | 
-             <a href="#" (click)="showPrivacyPolicy()">Privacy Policy</a> | 
-             <a href="#" (click)="showTermsOfService()">Terms of Service</a>
-          </p>
+          <span class="text-2xl font-black tracking-tight text-white">AgriPrice</span>
+        </a>
+        <p class="text-emerald-100/60 leading-relaxed text-sm max-w-xs">
+          Empowering Kenyan farmers with transparent, real-time market intelligence and direct access to fair pricing.
+        </p>
+        <div class="flex gap-3">
+          <button
+            class="w-10 h-10 rounded-full bg-white/5 hover:bg-[#bef264] hover:text-emerald-950 text-emerald-100 transition-all flex items-center justify-center">
+            <i class="fab fa-facebook-f"></i>
+          </button>
+          <button
+            class="w-10 h-10 rounded-full bg-white/5 hover:bg-[#bef264] hover:text-emerald-950 text-emerald-100 transition-all flex items-center justify-center">
+            <i class="fab fa-twitter"></i>
+          </button>
+          <button
+            class="w-10 h-10 rounded-full bg-white/5 hover:bg-[#bef264] hover:text-emerald-950 text-emerald-100 transition-all flex items-center justify-center">
+            <i class="fab fa-linkedin-in"></i>
+          </button>
         </div>
       </div>
-    </footer>
+
+      <!-- Links Column 1 -->
+      <div>
+        <h4 class="text-[#bef264] font-bold uppercase tracking-widest text-xs mb-8">Platform</h4>
+        <ul class="space-y-4">
+          <li><a routerLink="/"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">Market
+              Intelligence</a></li>
+          <li><a routerLink="/public"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">Public Portal</a>
+          </li>
+          <li><a routerLink="/admin/dashboard"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">Admin Dashboard</a>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Links Column 2 -->
+      <div>
+        <h4 class="text-[#bef264] font-bold uppercase tracking-widest text-xs mb-8">Features</h4>
+        <ul class="space-y-4">
+          <li><a (click)="navigateToSection('prices')"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">Price Tracking</a>
+          </li>
+          <li><a (click)="navigateToSection('predictions')"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">ML Predictions</a>
+          </li>
+          <li><a (click)="openChatbot()"
+              class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">AI Chatbot</a></li>
+          <li><a class="text-emerald-100/70 hover:text-white transition-colors cursor-pointer text-sm">SMS Interface</a>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Contact Column -->
+      <div>
+        <h4 class="text-[#bef264] font-bold uppercase tracking-widest text-xs mb-8">Contact</h4>
+        <ul class="space-y-4 text-emerald-100/70 text-sm">
+          <li class="flex items-start gap-4">
+            <div
+              class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center shrink-0 text-[#bef264]">
+              <i class="fas fa-phone-alt text-xs"></i>
+            </div>
+            <div>
+              <span class="block text-white font-bold">SMS Support</span>
+              <span>+254-700-AGRI</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-4">
+            <div
+              class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center shrink-0 text-[#bef264]">
+              <i class="fas fa-envelope text-xs"></i>
+            </div>
+            <div>
+              <span class="block text-white font-bold">Email Us</span>
+              <span>info@agriprice.ke</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-4">
+            <div
+              class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center shrink-0 text-[#bef264]">
+              <i class="fas fa-map-marker-alt text-xs"></i>
+            </div>
+            <div>
+              <span class="block text-white font-bold">Visit Us</span>
+              <span>Tech Hub, Nairobi, KE</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+    </div>
+
+    <!-- Bottom Section -->
+    <div class="flex flex-col md:flex-row justify-between items-center gap-6 text-sm text-emerald-100/40">
+      <p>&copy; 2025 AgriPrice Tracker. All rights reserved.</p>
+      <div class="flex gap-8 font-medium">
+        <a (click)="showPrivacyPolicy()" class="hover:text-white cursor-pointer transition-colors">Privacy</a>
+        <a (click)="showTermsOfService()" class="hover:text-white cursor-pointer transition-colors">Terms</a>
+      </div>
+    </div>
+
+  </div>
+</footer>

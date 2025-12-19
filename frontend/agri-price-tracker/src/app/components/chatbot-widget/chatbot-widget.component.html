@@ -1,111 +1,122 @@
-<div class="chatbot-widget">
-      <!-- Chatbot Toggle Button -->
-      <button 
-        class="chatbot-toggle" 
-        (click)="toggleChat()"
-        [class.active]="isOpen">
-        <i class="fas" [class.fa-comment]="!isOpen" [class.fa-times]="isOpen"></i>
-      </button>
-      
-      <!-- Chat Window -->
-      <div class="chat-window" [class.open]="isOpen">
-        <div class="chat-header">
-          <div class="chat-title">
-            <i class="fas fa-robot"></i>
-            <span>AgriBot Assistant</span>
-          </div>
-          <div class="chat-status">
-            <span class="status-indicator online"></span>
-            <small>Price Expert</small>
-          </div>
+<div class="fixed bottom-6 right-6 z-50">
+  <!-- Chatbot Toggle Button -->
+  <p-button (onClick)="toggleChat()"
+    styleClass="w-14 h-14 rounded-full shadow-2xl transition-transform duration-300 hover:scale-110 flex items-center justify-center p-0!"
+    severity="primary" pTooltip="Ask AgriBot" tooltipPosition="left">
+    <ng-template pTemplate="content">
+      <div class="relative flex items-center justify-center">
+        <i class="fas text-xl transition-all duration-300" [class.fa-comment-dots]="!isOpen" [class.fa-times]="isOpen"
+          [class.rotate-90]="isOpen"></i>
+        @if (!isOpen) {
+        <span class="absolute -top-4 -right-4 flex h-4 w-4">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+          <span
+            class="relative inline-flex rounded-full h-4 w-4 bg-accent text-[9px] items-center justify-center text-white font-bold">1</span>
+        </span>
+        }
+      </div>
+    </ng-template>
+  </p-button>
+
+  <!-- Chat Window -->
+  @if (isOpen) {
+  <div
+    class="absolute bottom-20 right-0 w-[350px] md:w-[400px] max-h-[600px] h-[80vh] flex flex-col bg-white shadow-2xl rounded-2xl border border-surface-200 overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300">
+    <!-- Header -->
+    <div class="bg-primary-700 p-4 text-white flex items-center justify-between shadow-md">
+      <div class="flex items-center gap-3">
+        <div class="relative">
+          <p-avatar icon="pi pi-robot" shape="circle" styleClass="bg-primary-500! text-white! w-10 h-10"></p-avatar>
+          <span class="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></span>
         </div>
-        
-        <div class="chat-body" #chatBody>
-          <div class="welcome-message" *ngIf="messages.length === 0">
-            <div class="bot-avatar">
-              <i class="fas fa-robot"></i>
-            </div>
-            <div class="welcome-content">
-              <h4>Welcome to AgriBot! 🌾</h4>
-              <p>I specialize in agricultural pricing information. Ask me about:</p>
-              <ul>
-                <li>Current crop prices</li>
-                <li>Price predictions</li>
-                <li>Market comparisons</li>
-                <li>Best selling times</li>
-              </ul>
-              <div class="quick-actions">
-                <button class="quick-btn" (click)="sendQuickMessage('What are today\'s maize prices?')">
-                  📊 Maize Prices
-                </button>
-                <button class="quick-btn" (click)="sendQuickMessage('Show me tomato price predictions')">
-                  🔮 Price Predictions
-                </button>
-                <button class="quick-btn" (click)="sendQuickMessage('Compare bean prices across regions')">
-                  📈 Price Comparison
-                </button>
-              </div>
-            </div>
-          </div>
-          
-          <div class="messages-container">
-            <div *ngFor="let message of messages" class="message" [class]="message.sender">
-              <div class="message-content" [class]="message.type">
-                <div *ngIf="message.sender === 'bot'" class="bot-avatar">
-                  <i class="fas fa-robot"></i>
-                </div>
-                <div class="message-bubble">
-                  <div [innerHTML]="formatMessage(message.content)"></div>
-                  <span class="message-time">{{ formatTime(message.timestamp) }}</span>
-                </div>
-              </div>
-            </div>
-            
-            <div *ngIf="isTyping" class="message bot">
-              <div class="message-content">
-                <div class="bot-avatar">
-                  <i class="fas fa-robot"></i>
-                </div>
-                <div class="message-bubble typing">
-                  <div class="typing-indicator">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div class="flex flex-col">
+          <h3 class="font-bold text-sm leading-tight">AgriBot Assistant</h3>
+          <div class="text-[9px] opacity-80 uppercase tracking-widest font-bold">Market Intelligence AI</div>
         </div>
-        
-        <div class="chat-footer">
-          <div class="suggested-questions" *ngIf="suggestedQuestions.length > 0">
-            <small>Try asking:</small>
-            <div class="suggestions">
-              <button 
-                *ngFor="let suggestion of suggestedQuestions" 
-                class="suggestion-btn"
-                (click)="sendQuickMessage(suggestion)">
-                {{ suggestion }}
-              </button>
-            </div>
+      </div>
+      <p-button icon="pi pi-minus" [text]="true" size="small" (onClick)="toggleChat()"
+        styleClass="text-white! hover:bg-white/10!"></p-button>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-50/50" #chatBody>
+      <!-- Welcome Message -->
+      @if (messages.length === 0) {
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-surface-200">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center text-primary-600">
+            <i class="fas fa-seedling text-lg"></i>
           </div>
-          
-          <div class="chat-input">
-            <input 
-              type="text" 
-              [(ngModel)]="currentMessage" 
-              (keyup.enter)="sendMessage()"
-              placeholder="Ask about crop prices..."
-              class="message-input"
-              [disabled]="isTyping">
-            <button 
-              class="send-btn" 
-              (click)="sendMessage()"
-              [disabled]="!currentMessage.trim() || isTyping">
-              <i class="fas fa-paper-plane"></i>
-            </button>
+          <h4 class="font-bold text-surface-900 text-sm">Welcome to AgriBot! 🌾</h4>
+        </div>
+        <p class="text-xs text-surface-500 mb-4 leading-relaxed">I'm your AI market expert. Ask me anything about
+          agricultural prices and trends.</p>
+        <div class="flex flex-col gap-2">
+          <p-button label="Today's Maize Prices" icon="pi pi-chart-line" [text]="true"
+            (onClick)="sendQuickMessage('What are today\'s maize prices?')"
+            styleClass="w-full text-left! justify-start! text-xs font-semibold! text-primary-600! bg-surface-50! hover:bg-primary-50! border border-transparent hover:border-primary-100!"></p-button>
+          <p-button label="Price Predictions" icon="pi pi-bolt" [text]="true"
+            (onClick)="sendQuickMessage('Show me tomato price predictions')"
+            styleClass="w-full text-left! justify-start! text-xs font-semibold! text-primary-600! bg-surface-50! hover:bg-primary-50! border border-transparent hover:border-primary-100!"></p-button>
+          <p-button label="Regional Comparison" icon="pi pi-map" [text]="true"
+            (onClick)="sendQuickMessage('Compare bean prices across regions')"
+            styleClass="w-full text-left! justify-start! text-xs font-semibold! text-primary-600! bg-surface-50! hover:bg-primary-50! border border-transparent hover:border-primary-100!"></p-button>
+        </div>
+      </div>
+      }
+
+      <!-- Messages -->
+      @for (msg of messages; track msg.id) {
+      <div class="flex flex-col" [class.items-end]="msg.sender === 'user'" [class.items-start]="msg.sender === 'bot'">
+        <div class="flex items-end gap-2 max-w-[85%]" [class.flex-row-reverse]="msg.sender === 'user'">
+          <p-avatar [icon]="msg.sender === 'user' ? 'pi pi-user' : 'pi pi-robot'" shape="circle"
+            styleClass="w-6 h-6 shrink-0" [class.bg-surface-200]="msg.sender === 'user'"
+            [class.bg-primary-500]="msg.sender === 'bot'"></p-avatar>
+
+          <div class="flex flex-col" [class.items-end]="msg.sender === 'user'">
+            <div class="px-3 py-2 rounded-2xl text-[13px] shadow-sm transform transition-all" [ngClass]="msg.sender === 'user' 
+                        ? 'bg-primary-600 text-white rounded-br-none' 
+                        : 'bg-white border border-surface-200 text-surface-800 rounded-bl-none'">
+              <div [innerHTML]="formatMessage(msg.content)" class="leading-relaxed"></div>
+            </div>
+            <span class="text-[9px] text-surface-400 mt-1 px-1">{{ formatTime(msg.timestamp) }}</span>
           </div>
         </div>
       </div>
+      }
+
+      <!-- Typing Indicator -->
+      @if (isTyping) {
+      <div class="flex items-end gap-2">
+        <p-avatar icon="pi pi-robot" shape="circle" styleClass="w-6 h-6 bg-primary-500! text-white!"></p-avatar>
+        <div
+          class="bg-white border border-surface-200 px-3 py-2 rounded-2xl rounded-bl-none shadow-sm flex items-center gap-1">
+          <span class="w-1.5 h-1.5 bg-primary-300 rounded-full animate-bounce"></span>
+          <span class="w-1.5 h-1.5 bg-primary-400 rounded-full animate-bounce [animation-delay:0.2s]"></span>
+          <span class="w-1.5 h-1.5 bg-primary-500 rounded-full animate-bounce [animation-delay:0.4s]"></span>
+        </div>
+      </div>
+      }
     </div>
+
+    <!-- Footer/Input -->
+    <div class="p-4 bg-white border-t border-surface-100">
+      @if (suggestedQuestions.length > 0) {
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        @for (suggestion of suggestedQuestions; track suggestion) {
+        <p-button [label]="suggestion" (onClick)="sendQuickMessage(suggestion)"
+          styleClass="text-[10px] font-bold! text-surface-600! bg-surface-100! hover:bg-surface-200! border-none! px-2.5 py-1! rounded-full! transition-colors"></p-button>
+        }
+      </div>
+      }
+      <form (ngSubmit)="sendMessage()" class="flex gap-2">
+        <input pInputText type="text" [(ngModel)]="currentMessage" name="currentMessage" placeholder="Type a message..."
+          class="flex-1 text-sm! py-2! px-4! rounded-full! bg-surface-50! border-surface-200! focus:border-primary-500! transition-all"
+          [disabled]="isTyping" autocomplete="off">
+        <p-button type="submit" icon="pi pi-send" styleClass="w-9 h-9 rounded-full! p-0!"
+          [disabled]="!currentMessage.trim() || isTyping"></p-button>
+      </form>
+    </div>
+  </div>
+  }
+</div>

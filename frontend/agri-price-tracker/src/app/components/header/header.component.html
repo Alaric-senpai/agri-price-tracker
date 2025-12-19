@@ -1,60 +1,65 @@
-<header class="header">
-  <div class="container">
-    <nav class="navbar">
-      <div class="navbar-brand" (click)="switchPage('home')">
-        <i class="fas fa-seedling"></i>
-        <div class="brand-text">
-          <span class="brand-name">AgriPrice</span>
-          <small class="brand-subtitle">Transparent Agricultural Pricing</small>
-        </div>
+<div class="fixed top-6 left-0 right-0 z-[1000] px-4 flex justify-center">
+  <div
+    class="w-full max-w-6xl bg-white/90 backdrop-blur-md shadow-xl rounded-full px-6 py-2 flex items-center justify-between border border-surface-200/50 transition-all duration-300">
+
+    <!-- Logo Section -->
+    <a routerLink="/" class="flex items-center gap-2 no-underline group">
+      <div
+        class="w-10 h-10 bg-emerald-900 rounded-full flex items-center justify-center text-white shadow-lg transition-transform group-hover:scale-105">
+        <i class="fas fa-leaf text-lg"></i>
       </div>
+      <span class="text-xl font-bold text-emerald-950 tracking-tight">AgriPrice</span>
+    </a>
 
-      <div class="navbar-menu" [class.active]="isMenuOpen">
-        <a href="#" class="nav-link" [class.active]="currentPage === 'home'" (click)="switchPage('home')">
-          <i class="fas fa-home"></i>
-          Home
-        </a>
+    <!-- Desktop Navigation (Centered) -->
+    <div class="hidden md:flex items-center gap-1 bg-surface-100/50 rounded-full px-2 py-1">
+      @for (item of items; track item.label) {
+      @if (item.visible !== false) {
+      <a [routerLink]="item.routerLink" routerLinkActive="bg-white text-emerald-900 shadow-sm"
+        [routerLinkActiveOptions]="{exact: true}"
+        class="px-5 py-2 rounded-full text-sm font-semibold text-surface-600 hover:text-emerald-900 transition-all duration-200 no-underline cursor-pointer">
+        {{ item.label }}
+      </a>
+      }
+      }
+    </div>
 
-        <a href="#" class="nav-link" [class.active]="currentPage === 'public'" (click)="switchPage('public')">
-          <i class="fas fa-chart-line"></i>
-          Public Portal
-        </a>
+    <!-- Actions Section -->
+    <div class="flex items-center gap-3">
+      <!-- Search Placeholder -->
+      <button
+        class="w-10 h-10 rounded-full bg-surface-100 flex items-center justify-center text-surface-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors hidden sm:flex">
+        <i class="fas fa-search text-sm"></i>
+      </button>
 
-        <a href="#" class="nav-link" [class.active]="currentPage === 'admin'" (click)="handleAdminAccess()"
-          *ngIf="!isAdmin">
-          <i class="fas fa-sign-in-alt"></i>
-          Admin Login
-        </a>
-
-        <a href="#" class="nav-link" [class.active]="currentPage === 'admin'" (click)="switchPage('admin')"
-          *ngIf="isAdmin">
-          <i class="fas fa-cog"></i>
-          Admin Dashboard
-        </a>
-
-        <button class="btn btn-register" (click)="registerAdmin()" *ngIf="!isAdmin">
-          <i class="fas fa-user-plus"></i>
-          Register as Admin
-        </button>
+      @if (isAdmin) {
+      <div class="flex items-center gap-2 pl-2 border-l border-surface-200">
+        <p-avatar [label]="adminName.charAt(0).toUpperCase()" shape="circle"
+          styleClass="bg-emerald-800 text-white w-9 h-9 font-bold text-sm"></p-avatar>
+        <p-button icon="pi pi-sign-out" [rounded]="true" [text]="true" severity="danger" (onClick)="logout()"
+          styleClass="w-9 h-9"></p-button>
       </div>
+      } @else {
+      <a routerLink="/register"
+        class="hidden sm:block text-emerald-900 hover:text-emerald-700 font-bold text-sm mr-4 transition-colors no-underline">
+        Register
+      </a>
+      <a routerLink="/login"
+        class="hidden sm:flex items-center justify-center bg-emerald-900 text-white font-bold text-sm px-6 py-2.5 rounded-full shadow-lg shadow-emerald-900/20 hover:bg-emerald-800 transition-colors no-underline">
+        Login
+      </a>
 
-      <div class="navbar-actions">
-        <!-- Compact Admin Info & Logout -->
-        <div *ngIf="isAdmin" class="user-status-compact">
-          <span class="admin-badge-compact">
-            <i class="fas fa-shield-alt"></i>
-            <span class="admin-name-text">{{ adminName }}</span>
-          </span>
-          <button class="btn btn-logout" (click)="adminLogout()">
-            <i class="fas fa-sign-out-alt"></i>
-            <span class="logout-text">Logout</span>
-          </button>
-        </div>
-
-        <button class="mobile-menu-toggle" (click)="toggleMenu()">
-          <i class="fas" [class.fa-bars]="!isMenuOpen" [class.fa-times]="isMenuOpen"></i>
-        </button>
-      </div>
-    </nav>
+      <!-- Mobile Menu Button -->
+      <button
+        class="w-10 h-10 rounded-full bg-emerald-900 text-white md:hidden flex items-center justify-center shadow-lg"
+        (click)="menu.toggle($event)">
+        <i class="fas fa-bars"></i>
+      </button>
+      }
+    </div>
   </div>
-</header>
+</div>
+
+<!-- Mobile Menu (PrimeNG Menu) -->
+<p-menu #menu [model]="items" [popup]="true"
+  styleClass="w-64 mt-4 rounded-xl border-none shadow-2xl font-semibold"></p-menu>
